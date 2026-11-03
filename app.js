@@ -2538,6 +2538,28 @@
     query: '',
     keysBuilt: false,
     results: [],
+    HISTORY_KEY: 'search_history',
+    HISTORY_MAX: 3,
+
+    /* последние запросы (храним 3) */
+    history: function () {
+      try {
+        var arr = JSON.parse(storageGet(this.HISTORY_KEY, '[]'));
+        return arr instanceof Array ? arr.slice(0, this.HISTORY_MAX) : [];
+      } catch (e) { return []; }
+    },
+
+    remember: function (q) {
+      q = String(q || '').replace(/^\s+|\s+$/g, '');
+      if (!q) return;
+      var list = this.history();
+      var out = [q];
+      for (var i = 0; i < list.length && out.length < this.HISTORY_MAX; i++) {
+        if (String(list[i]).toLowerCase() !== q.toLowerCase()) out.push(list[i]);
+      }
+      try { storageSet(this.HISTORY_KEY, JSON.stringify(out)); } catch (e) { /* quota */ }
+      this.renderRecent();
+    },
 
     isOpen: function () {
       var s = $('search_view');
@@ -2549,10 +2571,12 @@
       var m = $('main_view');
       if (!s || !m) return;
       this.buildKeys();
+      this.buildRecent();
       hideListViews();
       s.style.display = 'flex';
       m.style.display = 'none';
       this.renderQuery();
+      this.renderRecent();
       TVNavigation.focusIn(s);
     },
 
@@ -2593,6 +2617,65 @@
       this.keysBuilt = true;
     },
 
+    /* Контейнер «последних запросов» под клавиатурой (создаём из JS) */
+    buildRecent: function () {
+      if ($('search_recent')) return;
+      var keys = $('search_keys');
+      if (!keys || !keys.parentNode) return;
+      var title = document.createElement('div');
+      title.className = 'view_hint';
+      title.id = 'search_recent_title';
+      title.textContent = 'Последние запросы';
+      title.style.display = 'none';
+      title.style.marginTop = '18px';
+
+      var box = document.createElement('div');
+      box.id = 'search_recent';
+      box.style.display = 'none';
+      box.style.flexWrap = 'wrap';
+      box.style.marginTop = '10px';
+
+      keys.parentNode.insertBefore(title, keys.nextSibling);
+      title.parentNode.insertBefore(box, title.nextSibling);
+    },
+
+    renderRecent: function () {
+      var box = $('search_recent');
+      var title = $('search_recent_title');
+      if (!box) return;
+      var list = this.history();
+      box.innerHTML = '';
+      if (!list.length) {
+        box.style.display = 'none';
+        if (title) title.style.display = 'none';
+        return;
+      }
+      box.style.display = 'flex';
+      if (title) title.style.display = '';
+      for (var i = 0; i < list.length; i++) {
+        var chip = document.createElement('div');
+        chip.className = 'focusable';
+        chip.setAttribute('data-recent', String(list[i]));
+        chip.textContent = String(list[i]);
+        chip.style.padding = '10px 22px';
+        chip.style.marginRight = '14px';
+        chip.style.borderRadius = '10px';
+        chip.style.background = '#1c1c26';
+        chip.style.border = '3px solid transparent';
+        chip.style.fontSize = '24px';
+        chip.style.color = '#d8d8e2';
+        box.appendChild(chip);
+      }
+      TVNavigation.refresh();
+    },
+
+    /* Подставить сохранённый запрос и сразу выполнить поиск */
+    useRecent: function (q) {
+      this.query = String(q || '');
+      this.renderQuery();
+      this.run();
+    },
+
     press: function (k) {
       if (k === 'DEL') {
         this.query = this.query.substring(0, Math.max(0, this.query.length - 1));
@@ -2619,6 +2702,7 @@
       var self = this;
       var q = String(self.query || '').replace(/^\s+|\s+$/g, '');
       if (!q) { toast('Сначала введите название'); return; }
+      self.remember(q);
       var row = $('search_results');
       if (row) row.innerHTML = '<div class="history_empty">Поиск...</div>';
       Loader.show('Поиск...');
@@ -4099,6 +4183,10 @@
 
     if (el.classList.contains('ep_btn')) {
       TVRelease.playIndex(parseInt(el.getAttribute('data-ep'), 10));
+      return;
+    }
+    if (el.hasAttribute('data-recent')) {
+      TVSearch.useRecent(el.getAttribute('data-recent'));
       return;
     }
     if (el.classList.contains('key_btn')) {
