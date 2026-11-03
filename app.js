@@ -2401,6 +2401,107 @@
   /* ==========================================================
      Экран релиза: озвучка, источник, серии
      ========================================================== */
+  /* ==========================================================
+     Небольшое подменю выбора (озвучка / источник).
+     Разметка создаётся из JS: так меню можно добавить обновлением с GitHub,
+     не переустанавливая .wgt. Стили — классы qm_* из style.css.
+     ========================================================== */
+  var TVChoice = {
+    open: false,
+    title: '',
+    items: [],
+    index: 0,
+    apply: null,
+
+    ensure: function () {
+      var box = $('choice_menu');
+      if (box) return box;
+
+      box = document.createElement('div');
+      box.id = 'choice_menu';
+      box.style.position = 'fixed';
+      box.style.right = '90px';
+      box.style.top = '50%';
+      box.style.transform = 'translateY(-50%)';
+      box.style.width = '520px';
+      box.style.maxHeight = '62%';
+      box.style.overflowY = 'auto';
+      box.style.zIndex = '140';
+      box.style.padding = '24px 28px';
+      box.style.borderRadius = '12px';
+      box.style.background = 'rgba(16, 16, 22, 0.96)';
+      box.style.border = '2px solid #2a2a36';
+      box.style.display = 'none';
+
+      var title = document.createElement('div');
+      title.className = 'qm_title';
+      title.id = 'choice_title';
+      box.appendChild(title);
+
+      var list = document.createElement('div');
+      list.id = 'choice_list';
+      box.appendChild(list);
+
+      var hint = document.createElement('div');
+      hint.className = 'qm_hint';
+      hint.textContent = '▲ ▼ — выбор · OK — применить · RETURN — назад';
+      box.appendChild(hint);
+
+      document.body.appendChild(box);
+      return box;
+    },
+
+    show: function (title, items, index, apply) {
+      if (!items || !items.length) { toast('Нет вариантов', 2000); return; }
+      var box = this.ensure();
+      this.items = items;
+      this.index = Math.max(0, Math.min(items.length - 1, Number(index) || 0));
+      this.apply = apply || null;
+      this.open = true;
+      if ($('choice_title')) $('choice_title').textContent = title;
+      this.render();
+      box.style.display = 'block';
+    },
+
+    render: function () {
+      var list = $('choice_list');
+      if (!list) return;
+      list.innerHTML = '';
+      for (var i = 0; i < this.items.length; i++) {
+        var item = this.items[i];
+        var row = document.createElement('div');
+        row.className = 'qm_item' + (i === this.index ? ' active' : '');
+        row.textContent = (item && (item.name || item.title)) || ('Вариант ' + (i + 1));
+        list.appendChild(row);
+      }
+      var act = list.querySelector('.qm_item.active');
+      if (act) { try { act.scrollIntoView({ block: 'nearest' }); } catch (e) { /* noop */ } }
+    },
+
+    move: function (delta) {
+      if (!this.open) return;
+      var n = this.items.length;
+      if (!n) return;
+      this.index = (this.index + delta + n) % n;
+      this.render();
+    },
+
+    select: function () {
+      if (!this.open) return;
+      var item = this.items[this.index];
+      var fn = this.apply;
+      var idx = this.index;
+      this.close();
+      if (fn) fn(item, idx);
+    },
+
+    close: function () {
+      this.open = false;
+      var box = $('choice_menu');
+      if (box) box.style.display = 'none';
+    }
+  };
+
   var TVRelease = {
     rel: null,
     types: [],
@@ -2430,6 +2531,7 @@
       var v = $('release_view');
       var m = $('main_view');
       if (!v) return;
+      TVChoice.close();
       v.style.display = 'none';
       var rv = $('related_view');
       if (rv) rv.style.display = 'none';
@@ -2725,6 +2827,34 @@
         if (list[i] && String(list[i].id) === String(saved)) return i;
       }
       return 0;
+    },
+
+    /* Подменю выбора озвучки */
+    chooseType: function () {
+      var self = this;
+      if (!self.types.length) { toast('Нет озвучек', 2000); return; }
+      TVChoice.show('Озвучка', self.types, self.typeIndex, function (item, idx) {
+        self.typeIndex = idx;
+        if (item && item.id !== undefined && item.id !== null) {
+          storageSet('last_type_id', String(item.id));
+        }
+        Loader.show('Загрузка...');
+        self.applyType();
+      });
+    },
+
+    /* Подменю выбора источника */
+    chooseSource: function () {
+      var self = this;
+      if (!self.sources.length) { toast('Нет источников', 2000); return; }
+      TVChoice.show('Источник', self.sources, self.sourceIndex, function (item, idx) {
+        self.sourceIndex = idx;
+        if (item && item.id !== undefined && item.id !== null) {
+          storageSet('last_source_id', String(item.id));
+        }
+        Loader.show('Загрузка...');
+        self.applySource();
+      });
     },
 
     cycleType: function () {
@@ -3390,6 +3520,12 @@
 
     if (isRepeat(e, KEY.RETURN)) return;
 
+    /* RETURN в подменю выбора (озвучка/источник) закрывает только его */
+    if (TVChoice.open) {
+      TVChoice.close();
+      return;
+    }
+
     /* RETURN при открытом меню качества закрывает только меню */
     if (TVPlayer.menuOpen) {
       TVPlayer.hideQualityMenu();
@@ -3613,8 +3749,8 @@
     if (el.id === 'search_clear') { TVSearch.clear(); return; }
     if (el.id === 'search_back') { TVSearch.hide(); return; }
     if (el.id === 'rel_play') { TVRelease.playResume(); return; }
-    if (el.id === 'rel_voice') { TVRelease.cycleType(); return; }
-    if (el.id === 'rel_source') { TVRelease.cycleSource(); return; }
+    if (el.id === 'rel_voice') { TVRelease.chooseType(); return; }
+    if (el.id === 'rel_source') { TVRelease.chooseSource(); return; }
     if (el.id === 'rel_bookmark') { toggleBookmark(); return; }
     if (el.id === 'rel_related_btn') { TVRelease.openRelated(); return; }
     if (el.id === 'rel_back') { TVRelease.hide(); return; }
@@ -3674,6 +3810,21 @@
       return;
     }
 
+    /* подменю выбора (озвучка/источник): ▲▼ — навигация, OK — применить */
+    if (TVChoice.open) {
+      if (code === KEY.UP || code === KEY.DOWN) {
+        e.preventDefault();
+        TVChoice.move(code === KEY.UP ? -1 : 1);
+        return;
+      }
+      if (code === KEY.ENTER) {
+        e.preventDefault();
+        TVChoice.select();
+        return;
+      }
+      return;
+    }
+
     if (isPlayerOpen()) {
       /* меню качества: стрелки вверх/вниз, OK — применить */
       if (TVPlayer.menuOpen) {
@@ -3682,8 +3833,7 @@
         else if (code === KEY.DOWN) TVPlayer.qualityMove(1);
         else if (code === KEY.ENTER) TVPlayer.qualitySelect();
         return;
-      }
-      /* жёлтая кнопка пульта открывает выбор качества */
+      }      /* жёлтая кнопка пульта открывает выбор качества */
       if (code === KEY.YELLOW && !TVPlayer.webMode) {
         e.preventDefault();
         TVPlayer.showQualityMenu();
@@ -3875,6 +4025,7 @@
   window.TVHome = TVHome;
   window.TVSearch = TVSearch;
   window.TVRelease = TVRelease;
+  window.TVChoice = TVChoice;
   /* для проверок: разбор и раскодирование ссылок Kodik */
   window.kodikParse = kodikParse;
   window.kodikDecodeLink = kodikDecodeLink;
