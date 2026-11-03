@@ -3336,6 +3336,11 @@
       }
       if (m) m.style.display = 'none';
       if (r) r.style.display = 'none';
+      /* экран связанных релизов тоже должен уйти, иначе висит поверх раздела */
+      var rv = $('related_view');
+      if (rv) rv.style.display = 'none';
+      TVChoice.close();
+      if (TVPlayer.menuOpen) TVPlayer.hideQualityMenu();
       if (s) s.style.display = 'none';
       if (st) st.style.display = 'none';
       v.style.display = 'flex';
@@ -4048,18 +4053,23 @@
       var nav = el.getAttribute('data-nav');
       if (nav === 'popular' || nav === 'schedule' || nav === 'collections' ||
           nav === 'filters' || nav === 'bookmarks' || nav === 'history') {
-        if (TVRelease.isOpen()) TVRelease.hide();
+        if (TVRelease.isOpen() || TVRelease.isRelatedOpen()) {
+          TVRelease.returnKind = null;
+          TVRelease.hide();
+        }
         if (TVSearch.isOpen()) TVSearch.hide();
         if (TVSettings.isOpen()) TVSettings.hide();
         TVList.open(nav);
         return;
       }
       if (nav === 'settings') {
+        var rvs = $('related_view');
+        if (rvs) rvs.style.display = 'none';
         TVSettings.show(true);
         return;
       }
       /* «Главная»: закрыть всё открытое и вернуться на главный экран */
-      if (TVRelease.isOpen()) {
+      if (TVRelease.isOpen() || TVRelease.isRelatedOpen()) {
         TVRelease.returnKind = null;
         TVRelease.hide();
       }
