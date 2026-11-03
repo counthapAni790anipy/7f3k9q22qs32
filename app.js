@@ -1933,12 +1933,16 @@
 
       LIBRIA_DIAG.api = '';
       LIBRIA_DIAG.page = '';
+      function tag(slot) {
+        return '#' + info.id + ' ' + (LIBRIA_DIAG[slot] || '');
+      }
       return fetchText(api, 'api').then(function (json) {
         var picked = libriaFromApi(json, info.ep, prefer);
         if (picked) return picked;
         LIBRIA_DIAG.api = 'нет серий';
         throw new Error('No links in API');
       }).catch(function () {
+        LIBRIA_DIAG.api = tag('api');
         /* резерв: страница iframe */
         return fetchText(url, 'page').then(function (html) {
           var picked = libriaPick(libriaStreams(html, info.id, info.ep), prefer);
@@ -1947,6 +1951,9 @@
             throw new Error('No links');
           }
           return picked;
+        }).catch(function (e2) {
+          LIBRIA_DIAG.page = tag('page');
+          throw e2;
         });
       });
     },
@@ -1978,9 +1985,14 @@
         self.quality = picked.quality || '';
       }).catch(function (e) {
         Loader.hide();
-        PLAY_DIAG.error = String((e && e.message) || 'ошибка');
-        toast('Libria: API ' + (LIBRIA_DIAG.api || '—') + ' / страница ' +
-          (LIBRIA_DIAG.page || '—'), 5000);
+        PLAY_DIAG.error = 'API ' + (LIBRIA_DIAG.api || '—') + ' / страница ' + (LIBRIA_DIAG.page || '—');
+        /* если Libria недоступна — пробуем Kodik с другой озвучкой */
+        if (typeof TVRelease !== 'undefined' && TVRelease.rel && TVRelease.playKodikFallback) {
+          toast('Libria недоступна — пробую Kodik', 3000);
+          TVRelease.playKodikFallback(item.episode);
+          return;
+        }
+        toast('Libria: ' + (e && e.message) + '', 4000);
         self.openWeb(url, item);
       });
     },
@@ -3083,6 +3095,52 @@
       if (s && s.id !== undefined && s.id !== null) storageSet('last_source_id', String(s.id));
       Loader.show('Загрузка...');
       this.applySource();
+    },
+
+    /* Резерв: если Libria недоступна, включаем Kodik с другой озвучкой */
+    playKodikFallback: function (position) {
+      var self = this;
+      if (!self.rel || !self.types.length) { toast('Нет доступных источников', 3000); return; }
+      var started = self.typeIndex;
+      var tried = 0;
+
+      function nextType() {
+        tried++;
+        if (tried > self.types.length) {
+          toast('Libria и Kodik недоступны', 4000);
+          return;
+        }
+        var idx = (started + tried) % self.types.length;
+        var t = self.types[idx];
+        if (!t) { nextType(); return; }
+        AnixApi.sources(self.rel.id, t.id).then(function (srcs) {
+          var list = srcs || [];
+          var kodik = null;
+          for (var i = 0; i < list.length; i++) {
+            if (/kodik/i.test(String(list[i].name || ''))) { kodik = list[i]; break; }
+          }
+          if (!kodik) { nextType(); return; }
+          AnixApi.episodes(self.rel.id, t.id, kodik.id).then(function (eps) {
+            var arr = eps || [];
+            if (!arr.length) { nextType(); return; }
+            var k = -1;
+            for (var j = 0; j < arr.length; j++) {
+              if (Number(arr[j].position) === Number(position)) { k = j; break; }
+            }
+            if (k < 0) k = 0;
+            self.typeIndex = idx;
+            self.sources = list;
+            self.sourceIndex = list.indexOf(kodik);
+            self.episodes = arr;
+            if (t.id !== undefined && t.id !== null) storageSet('last_type_id', String(t.id));
+            self.renderEpisodes();
+            toast('Включена озвучка ' + (t.name || '') + ' (Kodik)', 3500);
+            self.playIndex(k);
+          }).catch(function () { nextType(); });
+        }).catch(function () { nextType(); });
+      }
+
+      nextType();
     },
 
     /* Включить следующую серию после окончания текущей */
