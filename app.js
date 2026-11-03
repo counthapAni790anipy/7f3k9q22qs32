@@ -1327,6 +1327,7 @@
     kodikUrl: '',
     sourceKind: '',      /* 'kodik' | 'libria' — для смены качества */
     sourceUrl: '',
+    resolvedCache: {},   /* url|качество -> поток (на 5 минут) */
     menuOpen: false,
     menuIndex: 0,
     menuItems: [],
@@ -1865,32 +1866,44 @@
       }
     },
 
-    /* Kodik: получить прямой HLS из страницы плеера */
+    /* Kodik: получить прямой HLS из страницы плеера.
+       XHR и нативная загрузка идут ПАРАЛЛЕЛЬНО — что ответит быстрее, то и берём
+       (раньше загрузка пробовалась первой и старт серии растягивался на секунды). */
     resolveKodik: function (url, prefer) {
       var info = kodikParse(url);
       if (!info) return Promise.reject(new Error('not kodik'));
       var api = 'https://kodikplayer.com/ftor?hash=' + encodeURIComponent(info.hash) +
         '&id=' + encodeURIComponent(info.id) + '&type=' + encodeURIComponent(info.type);
-      /* пробуем все доступные способы: нативный HTTP Tizen, XHR, fetch, загрузка */
-      return tizenHttpGet(api, 12000).catch(function (e1) {
-        return tizenDownloadText(api, 15000).catch(function (eDl) {
-          return kodikHttpGet(api, 12000).catch(function (e2) {
-            return TVNetwork.get(api, { timeout: 8000, mode: 'direct' }).catch(function (e3) {
-              KODIK_DIAG.error = 'http:' + (e1.message || '-') + ' dl:' + (eDl.message || '-') +
-                ' xhr:' + (e2.message || '-') + ' fetch:' + (e3.message || '-');
-              throw new Error(KODIK_DIAG.error);
-            });
-          });
+
+      /* кеш ссылок: повторный запуск той же серии — мгновенно */
+      var key = url + '|' + String(prefer || 'auto');
+      var cached = this.resolvedCache[key];
+      var now = (new Date()).getTime();
+      if (cached && now - cached.ts < 5 * 60 * 1000) {
+        KODIK_DIAG.via = 'ok (кеш)';
+        return Promise.resolve(cached.picked);
+      }
+
+      var t0 = now;
+      return Promise.race([
+        kodikHttpGet(api, 10000),
+        tizenDownloadText(api, 12000)
+      ]).catch(function (e1) {
+        /* если оба быстрых способа не справились — последний резерв: fetch/прокси */
+        return TVNetwork.get(api, { timeout: 8000, mode: 'direct' }).catch(function (e2) {
+          KODIK_DIAG.error = 'xhr+dl: ' + (e1.message || '-') + ' / fetch: ' + (e2.message || '-');
+          throw new Error(KODIK_DIAG.error);
         });
       }).then(function (txt) {
         var json = null;
         try { json = JSON.parse(txt); } catch (e) { throw new Error('Bad JSON'); }
         var picked = kodikPickHls(json, prefer);
         if (!picked) throw new Error('No links');
-        KODIK_DIAG.via = 'ok';
+        this.resolvedCache[key] = { picked: picked, ts: (new Date()).getTime() };
+        KODIK_DIAG.via = 'ok ' + ((new Date()).getTime() - t0) + ' мс';
         KODIK_DIAG.error = '';
         return picked;
-      });
+      }.bind(this));
     },
 
     /* Libria: сначала API anilibria.top (другой хост, отдаёт HLS по сериям),
@@ -2007,8 +2020,13 @@
         return;
       }
       if (!prefer) prefer = self.qualityPref();
-      Loader.show('Получение видео...');
+      /* индикатор показываем только если получение ссылки реально затянулось */
+      var loaderTimer = setTimeout(function () { Loader.show('Получение видео...'); }, 400);
+      function stopLoader() {
+        if (loaderTimer) { clearTimeout(loaderTimer); loaderTimer = null; }
+      }
       self.resolveKodik(url, prefer).then(function (picked) {
+        stopLoader();
         Loader.hide();
         var next = {};
         for (var k in item) {
@@ -2026,6 +2044,7 @@
         self.qualities = picked.available || [];
         self.quality = picked.quality || '';
       }).catch(function (e) {
+        stopLoader();
         Loader.hide();
         PLAY_DIAG.error = String((e && e.message) || 'ошибка');
         toast('Kodik: ' + ((e && e.message) || 'ошибка') + ' — встроенный плеер', 4000);
@@ -2261,7 +2280,8 @@
         if ($('diag_download')) $('diag_download').textContent = d.download ? 'есть' : 'нет';
         if ($('diag_avplay')) $('diag_avplay').textContent = d.avplay;
         if ($('diag_kodik')) {
-          var msg = d.via === 'ok' ? 'ссылка получена' : (d.error || '—');
+          var msg = (d.via && d.via.indexOf('ok') === 0)
+            ? ('ссылка получена ' + d.via.replace('ok', '').trim()) : (d.error || '—');
           $('diag_kodik').textContent = msg.length > 70 ? msg.substring(0, 70) + '…' : msg;
         }
         if ($('diag_decision')) $('diag_decision').textContent = PLAY_DIAG.decision || '—';
