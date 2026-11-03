@@ -1244,7 +1244,7 @@
     init: function () {
       this.container = $('player_container');
       this.video = $('html5_element');
-      this.mode = storageGet(this.MODE_KEY, 'html5') === 'avplay' ? 'avplay' : 'html5';
+      this.mode = storageGet(this.MODE_KEY, 'avplay') === 'html5' ? 'html5' : 'avplay';
       this.container.classList.add('mode-' + this.mode);
       this.bindVideo();
       /* при смене разрешения окна/экрана держим AVPlay-прямоугольник актуальным */
@@ -1707,6 +1707,11 @@
       item.src = item.src || CONFIG.defaultSrc;
       var mode = forceMode || self.mode;
       var playUrl = item.playSrc || item.src;
+      /* Режим должен совпадать с реально используемым плеером: от него зависят
+         и класс контейнера (какой элемент виден), и источник времени в тикере.
+         Иначе HLS играет звуком через AVPlay, а страница показывает чёрный <video>
+         и время стоит на 00:00. */
+      if (mode !== self.mode) self.setMode(mode);
 
       /* Повторное открытие (другой фильм или повтор того же) */
       if (self.opened) {
@@ -2033,7 +2038,7 @@
       return !!s && s.style.display === 'flex';
     },
     render: function () {
-      var pm = storageGet('player_mode', 'html5') === 'avplay' ? 'avplay' : 'html5';
+      var pm = storageGet('player_mode', 'avplay') === 'html5' ? 'html5' : 'avplay';
       var cm = TVNetwork.getMode();
       if ($('val_player_type')) $('val_player_type').textContent = pm;
       if ($('val_cors_mode')) $('val_cors_mode').textContent = cm;
@@ -2118,7 +2123,7 @@
       if (!row) return;
       var what = row.getAttribute('data-setting');
       if (what === 'player_type') {
-        var m = storageGet('player_mode', 'html5') === 'avplay' ? 'html5' : 'avplay';
+        var m = storageGet('player_mode', 'avplay') === 'avplay' ? 'html5' : 'avplay';
         TVPlayer.setMode(m);
         /* если плеер открыт — переключение применится к следующему запуску */
       } else if (what === 'cors_mode') {
