@@ -1901,16 +1901,33 @@
       var api = 'https://anilibria.top/api/v1/anime/releases/' + encodeURIComponent(info.id);
 
       function fetchText(u, slot) {
-        return tizenHttpGet(u, 12000).catch(function () {
-          return tizenDownloadText(u, 15000);
-        }).catch(function () {
-          return kodikHttpGet(u, 12000);
-        }).then(function (txt) {
-          LIBRIA_DIAG[slot] = 'ok';
+        var log = [];
+        function note(stage, err) {
+          log.push(stage + (err ? ':' + (err.message || err) : ':ok'));
+        }
+        function done(txt) {
+          LIBRIA_DIAG[slot] = log.join(' ');
           return txt;
-        }).catch(function (e) {
-          LIBRIA_DIAG[slot] = String((e && e.message) || 'ошибка');
-          throw e;
+        }
+        return tizenHttpGet(u, 12000).then(function (txt) {
+          note('http');
+          return done(txt);
+        }).catch(function (e1) {
+          note('http', e1);
+          return tizenDownloadText(u, 15000).then(function (txt) {
+            note('dl');
+            return done(txt);
+          }).catch(function (e2) {
+            note('dl', e2);
+            return kodikHttpGet(u, 12000).then(function (txt) {
+              note('xhr');
+              return done(txt);
+            }).catch(function (e3) {
+              note('xhr', e3);
+              LIBRIA_DIAG[slot] = log.join(' ');
+              throw e3;
+            });
+          });
         });
       }
 

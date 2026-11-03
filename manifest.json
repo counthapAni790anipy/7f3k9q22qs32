@@ -1,8 +1,8 @@
 {
-    "version":  "1.0.7",
-    "built":  "2026-11-03T13:58:23+07:00",
+    "version":  "1.0.8",
+    "built":  "2026-11-03T14:05:39+07:00",
     "app":  "app.js",
-    "sha256":  "e8de5cce884440c90741083769624191d8aa030ff9eb0a3fe135acaedd3de9d6",
+    "sha256":  "48459546f60032ff547dac0ef56cc589c622b2231c82e6e6e3a9226b557afb62",
     "minApp":  "1.0.0",
     "enabled":  true,
     "rollout":  100
