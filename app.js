@@ -1275,6 +1275,9 @@
     return { url: pick.url, quality: pick.quality || 'auto', available: avail };
   }
 
+  /* Диагностика Libria: что ответили API и страница на этом телевизоре */
+  var LIBRIA_DIAG = { api: '', page: '' };
+
   /* Разбор JSON API anilibria.top: episodes[].hls_1080/hls_720/hls_480 */
   function libriaFromApi(text, ep, prefer) {
     var j = null;
@@ -1897,23 +1900,35 @@
       if (!info) return Promise.reject(new Error('not libria'));
       var api = 'https://anilibria.top/api/v1/anime/releases/' + encodeURIComponent(info.id);
 
-      function fetchText(u) {
+      function fetchText(u, slot) {
         return tizenHttpGet(u, 12000).catch(function () {
           return tizenDownloadText(u, 15000);
         }).catch(function () {
           return kodikHttpGet(u, 12000);
+        }).then(function (txt) {
+          LIBRIA_DIAG[slot] = 'ok';
+          return txt;
+        }).catch(function (e) {
+          LIBRIA_DIAG[slot] = String((e && e.message) || 'ошибка');
+          throw e;
         });
       }
 
-      return fetchText(api).then(function (json) {
+      LIBRIA_DIAG.api = '';
+      LIBRIA_DIAG.page = '';
+      return fetchText(api, 'api').then(function (json) {
         var picked = libriaFromApi(json, info.ep, prefer);
         if (picked) return picked;
+        LIBRIA_DIAG.api = 'нет серий';
         throw new Error('No links in API');
       }).catch(function () {
         /* резерв: страница iframe */
-        return fetchText(url).then(function (html) {
+        return fetchText(url, 'page').then(function (html) {
           var picked = libriaPick(libriaStreams(html, info.id, info.ep), prefer);
-          if (!picked) throw new Error('No links');
+          if (!picked) {
+            LIBRIA_DIAG.page = 'нет ссылок';
+            throw new Error('No links');
+          }
           return picked;
         });
       });
@@ -1947,7 +1962,8 @@
       }).catch(function (e) {
         Loader.hide();
         PLAY_DIAG.error = String((e && e.message) || 'ошибка');
-        toast('Libria: ' + ((e && e.message) || 'ошибка'), 4000);
+        toast('Libria: API ' + (LIBRIA_DIAG.api || '—') + ' / страница ' +
+          (LIBRIA_DIAG.page || '—'), 5000);
         self.openWeb(url, item);
       });
     },
@@ -2248,6 +2264,23 @@
           var bnd = window.ANI_BUNDLE;
           $('val_code_version').textContent = (bnd && bnd.version)
             ? (bnd.version + ' (с GitHub)') : 'встроенная';
+        }
+        /* диагностика Libria: что ответили API и страница на этом ТВ */
+        if (sv && !$('val_libria')) {
+          var lrow = document.createElement('div');
+          lrow.className = 'setting_row';
+          var llab = document.createElement('span');
+          llab.className = 'setting_label';
+          llab.textContent = 'Libria (API / страница)';
+          var lval = document.createElement('span');
+          lval.className = 'setting_value';
+          lval.id = 'val_libria';
+          lrow.appendChild(llab);
+          lrow.appendChild(lval);
+          sv.appendChild(lrow);
+        }
+        if ($('val_libria')) {
+          $('val_libria').textContent = (LIBRIA_DIAG.api || '—') + ' / ' + (LIBRIA_DIAG.page || '—');
         }
       } catch (eDiag) { /* noop */ }
     },
