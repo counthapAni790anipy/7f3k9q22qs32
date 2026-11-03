@@ -3282,6 +3282,14 @@
         PLAY_DIAG.decision = 'iframe';
         TVPlayer.openWeb(ep.url, item);
       }
+
+      /* прогреваем ссылку следующей серии, чтобы автопереход был мгновенным */
+      var nextEp = this.episodes[i + 1];
+      if (nextEp && kodikParse(nextEp.url)) {
+        setTimeout(function () {
+          try { TVPlayer.resolveKodik(nextEp.url, TVPlayer.qualityPref()).catch(function () {}); } catch (e) {}
+        }, 3000);
+      }
     }
   };
 
