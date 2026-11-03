@@ -2979,7 +2979,16 @@
         return;
       }
       AnixApi.sources(self.rel.id, t.id).then(function (srcs) {
-        self.sources = srcs || [];
+        var all = srcs || [];
+        /* Libria отключена: её CDN не пускает телевизор (XHR 404/503) */
+        var list = [];
+        for (var i = 0; i < all.length; i++) {
+          if (!/libria/i.test(String(all[i] && all[i].name || ''))) list.push(all[i]);
+        }
+        if (all.length && !list.length) {
+          toast('Источник Libria отключён — других нет', 3500);
+        }
+        self.sources = list;
         /* вспоминаем источник, выбранный в прошлый раз */
         self.sourceIndex = self.pickSavedIndex(self.sources, 'last_source_id');
         self.applySource();
@@ -3004,7 +3013,13 @@
       var t = self.types[self.typeIndex];
       AnixApi.episodes(self.rel.id, t.id, s.id).then(function (eps) {
         Loader.hide();
-        self.episodes = eps || [];
+        var arr = eps || [];
+        /* подстраховка: не пускаем в плеер ссылки Libria, даже если источник назван иначе */
+        var clean = [];
+        for (var i = 0; i < arr.length; i++) {
+          if (!/libria\.fun/i.test(String(arr[i] && arr[i].url || ''))) clean.push(arr[i]);
+        }
+        self.episodes = clean.length ? clean : arr;
         self.renderEpisodes();
       }).catch(function (e) {
         Loader.hide();
