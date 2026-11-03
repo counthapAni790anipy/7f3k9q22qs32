@@ -1214,6 +1214,67 @@
     return { url: url, quality: q, available: avail };
   }
 
+  /* ---- Libria (anixart.libria.fun): iframe-страница с Playerjs,
+     внутри которой лежат прямые HLS-ссылки по качествам ---- */
+  function libriaParse(url) {
+    var m = /^(https?:)?\/\/([^\/]*libria\.fun)\/public\/iframe\.php\?([^#]*)/i.exec(String(url || ''));
+    if (!m) return null;
+    var q = m[3] || '';
+    var id = /(?:^|&)id=(\d+)/.exec(q);
+    var ep = /(?:^|&)ep=(\d+)/.exec(q);
+    if (!id) return null;
+    return { host: m[2], id: id[1], ep: ep ? ep[1] : '1' };
+  }
+
+  /* Разбор страницы: [480p]https://…m3u8?…,[720p]…,[1080p]… */
+  function libriaStreams(html, id, ep) {
+    var text = String(html || '').replace(/\\\//g, '/').replace(/\\u0026/g, '&').replace(/&amp;/g, '&');
+    var found = [];
+    var re = /\[(\d{3,4})p\]\s*(https?:\/\/[^,"'\]\s]+?\.m3u8[^,"'\]\s]*)/g;
+    var m;
+    while ((m = re.exec(text))) found.push({ quality: m[1], url: m[2] });
+    if (!found.length) {
+      var re2 = /(https?:\/\/[^,"'\]\s]+?\.m3u8[^,"'\]\s]*)/g;
+      while ((m = re2.exec(text))) found.push({ quality: '', url: m[1] });
+    }
+    /* оставить только нужную серию: путь /ts/<id>/<ep>/ */
+    var mine = [];
+    if (id && ep) {
+      var rx = new RegExp('/ts/' + id + '/' + ep + '/');
+      for (var i = 0; i < found.length; i++) if (rx.test(found[i].url)) mine.push(found[i]);
+    }
+    var list = mine.length ? mine : found;
+    var out = [];
+    var seen = {};
+    for (var j = 0; j < list.length; j++) {
+      var q = list[j].quality || 'auto';
+      if (seen[q]) continue;
+      seen[q] = 1;
+      out.push(list[j]);
+    }
+    return out;
+  }
+
+  function libriaPick(streams, prefer) {
+    if (!streams || !streams.length) return null;
+    var order = ['1080', '720', '480', '360'];
+    var avail = [];
+    for (var i = 0; i < streams.length; i++) avail.push(streams[i].quality || 'auto');
+    var pick = null;
+    if (prefer && prefer !== 'auto') {
+      for (var j = 0; j < streams.length; j++) {
+        if (String(streams[j].quality) === String(prefer)) { pick = streams[j]; break; }
+      }
+    }
+    for (var k = 0; k < order.length && !pick; k++) {
+      for (var n = 0; n < streams.length; n++) {
+        if (String(streams[n].quality) === order[k]) { pick = streams[n]; break; }
+      }
+    }
+    if (!pick) pick = streams[0];
+    return { url: pick.url, quality: pick.quality || 'auto', available: avail };
+  }
+
   /* ==========================================================
      4) TVPlayer — мультирежимный плеер
      ========================================================== */
@@ -1237,6 +1298,8 @@
     qualities: [],
     quality: '',
     kodikUrl: '',
+    sourceKind: '',      /* 'kodik' | 'libria' — для смены качества */
+    sourceUrl: '',
     menuOpen: false,
     menuIndex: 0,
     menuItems: [],
@@ -1470,6 +1533,8 @@
       this.qualities = [];
       this.quality = '';
       this.kodikUrl = '';
+      this.sourceKind = '';
+      this.sourceUrl = '';
       Loader.hide();
       this.clearHtml5();
       this.avClear();
@@ -1801,6 +1866,54 @@
       });
     },
 
+    /* Libria: скачиваем iframe-страницу и вытаскиваем прямые HLS-ссылки */
+    resolveLibria: function (url, prefer) {
+      var info = libriaParse(url);
+      if (!info) return Promise.reject(new Error('not libria'));
+      return tizenHttpGet(url, 12000).catch(function () {
+        return tizenDownloadText(url, 15000);
+      }).catch(function () {
+        return kodikHttpGet(url, 12000);
+      }).then(function (html) {
+        var picked = libriaPick(libriaStreams(html, info.id, info.ep), prefer);
+        if (!picked) throw new Error('No links');
+        return picked;
+      });
+    },
+
+    /* Открыть серию Libria в AVPlay */
+    playLibria: function (url, item, prefer, resumeAt) {
+      var self = this;
+      item = item || {};
+      if (!self.isAvplayAvailable()) {
+        self.openWeb(url, item);
+        return;
+      }
+      if (!prefer) prefer = self.qualityPref();
+      Loader.show('Получение видео...');
+      self.resolveLibria(url, prefer).then(function (picked) {
+        Loader.hide();
+        var next = {};
+        for (var k in item) {
+          if (item.hasOwnProperty(k)) next[k] = item[k];
+        }
+        next.src = url;
+        next.playSrc = picked.url;
+        if (resumeAt !== undefined && resumeAt !== null) next.resumeTime = resumeAt;
+        self.open(next, 'avplay');
+        self.fallbackWeb = url;
+        self.sourceKind = 'libria';
+        self.sourceUrl = url;
+        self.qualities = picked.available || [];
+        self.quality = picked.quality || '';
+      }).catch(function (e) {
+        Loader.hide();
+        PLAY_DIAG.error = String((e && e.message) || 'ошибка');
+        toast('Libria: ' + ((e && e.message) || 'ошибка'), 4000);
+        self.openWeb(url, item);
+      });
+    },
+
     /* Открыть серию Kodik во встроенном плеере (AVPlay + HLS).
        prefer — желаемое качество ('auto' или '720' и т.п.), resumeAt — секунда. */
     playKodik: function (url, item, prefer, resumeAt) {
@@ -1825,6 +1938,8 @@
         /* после open() — потому что reset() внутри open чистит состояние */
         self.fallbackWeb = url;
         self.kodikUrl = url;
+        self.sourceKind = 'kodik';
+        self.sourceUrl = url;
         self.qualities = picked.available || [];
         self.quality = picked.quality || '';
       }).catch(function (e) {
@@ -1885,7 +2000,8 @@
       if (!this.menuOpen) return;
       var q = this.menuItems[this.menuIndex];
       var pos = this.curTime || 0;
-      var url = this.kodikUrl;
+      var url = this.sourceUrl || this.kodikUrl;
+      var kind = this.sourceKind || 'kodik';
       this.hideQualityMenu();
       storageSet('video_quality', q);
       if (!url) return;
@@ -1897,7 +2013,8 @@
         src: url
       };
       toast('Качество: ' + (q === 'auto' ? 'авто' : q + 'p'));
-      this.playKodik(url, item, q, pos);
+      if (kind === 'libria') this.playLibria(url, item, q, pos);
+      else this.playKodik(url, item, q, pos);
     },
 
     openHtml5: function (item) {
@@ -2971,12 +3088,16 @@
       if (isMediaUrl(ep.url)) {
         PLAY_DIAG.decision = 'прямой файл';
         TVPlayer.open(item);
+      } else if (libriaParse(ep.url)) {
+        /* Libria: страница с прямыми HLS-ссылками — играем в AVPlay */
+        PLAY_DIAG.decision = 'libria';
+        TVPlayer.playLibria(ep.url, item);
       } else if (kodikParse(ep.url)) {
         /* Kodik: получаем прямой HLS и играем встроенным AVPlay */
         PLAY_DIAG.decision = 'kodik';
         TVPlayer.playKodik(ep.url, item);
       } else {
-        /* sibnet / libria — страницы плеера, показываем их во фрейме */
+        /* sibnet и подобные — страницы плеера, показываем их во фрейме */
         PLAY_DIAG.decision = 'iframe';
         TVPlayer.openWeb(ep.url, item);
       }
@@ -3707,7 +3828,8 @@
     };
     /* сохранённая ссылка может быть страницей плеера источника, а не медиафайлом */
     if (src && !isMediaUrl(src)) {
-      if (kodikParse(src)) TVPlayer.playKodik(src, item);
+      if (libriaParse(src)) TVPlayer.playLibria(src, item);
+      else if (kodikParse(src)) TVPlayer.playKodik(src, item);
       else TVPlayer.openWeb(src, item);
     } else {
       TVPlayer.open(item);
