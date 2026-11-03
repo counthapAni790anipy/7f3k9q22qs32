@@ -1275,6 +1275,30 @@
     return { url: pick.url, quality: pick.quality || 'auto', available: avail };
   }
 
+  /* Разбор JSON API anilibria.top: episodes[].hls_1080/hls_720/hls_480 */
+  function libriaFromApi(text, ep, prefer) {
+    var j = null;
+    try { j = JSON.parse(text); } catch (e) { return null; }
+    var eps = j && j.episodes;
+    if (!eps || !eps.length) return null;
+    var num = Number(ep) || 1;
+    var found = null;
+    for (var i = 0; i < eps.length; i++) {
+      if (Number(eps[i].ordinal) === num) { found = eps[i]; break; }
+    }
+    if (!found) found = eps[0];
+    var order = ['1080', '720', '480'];
+    var map = {};
+    var avail = [];
+    for (var k = 0; k < order.length; k++) {
+      var key = 'hls_' + order[k];
+      if (found[key]) { map[order[k]] = found[key]; avail.push(order[k]); }
+    }
+    if (!avail.length) return null;
+    var q = (prefer && prefer !== 'auto' && map[String(prefer)]) ? String(prefer) : avail[0];
+    return { url: map[q], quality: q, available: avail };
+  }
+
   /* ==========================================================
      4) TVPlayer — мультирежимный плеер
      ========================================================== */
@@ -1866,18 +1890,32 @@
       });
     },
 
-    /* Libria: скачиваем iframe-страницу и вытаскиваем прямые HLS-ссылки */
+    /* Libria: сначала API anilibria.top (другой хост, отдаёт HLS по сериям),
+       если он недоступен — разбираем iframe-страницу. */
     resolveLibria: function (url, prefer) {
       var info = libriaParse(url);
       if (!info) return Promise.reject(new Error('not libria'));
-      return tizenHttpGet(url, 12000).catch(function () {
-        return tizenDownloadText(url, 15000);
+      var api = 'https://anilibria.top/api/v1/anime/releases/' + encodeURIComponent(info.id);
+
+      function fetchText(u) {
+        return tizenHttpGet(u, 12000).catch(function () {
+          return tizenDownloadText(u, 15000);
+        }).catch(function () {
+          return kodikHttpGet(u, 12000);
+        });
+      }
+
+      return fetchText(api).then(function (json) {
+        var picked = libriaFromApi(json, info.ep, prefer);
+        if (picked) return picked;
+        throw new Error('No links in API');
       }).catch(function () {
-        return kodikHttpGet(url, 12000);
-      }).then(function (html) {
-        var picked = libriaPick(libriaStreams(html, info.id, info.ep), prefer);
-        if (!picked) throw new Error('No links');
-        return picked;
+        /* резерв: страница iframe */
+        return fetchText(url).then(function (html) {
+          var picked = libriaPick(libriaStreams(html, info.id, info.ep), prefer);
+          if (!picked) throw new Error('No links');
+          return picked;
+        });
       });
     },
 
