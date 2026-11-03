@@ -3815,9 +3815,24 @@
   }
 
   /* KEY_RETURN (10009) на Tizen обычно приходит на keyup, на части моделей — на keydown.
-     preventDefault() вызывается в любом случае и в любом состоянии. */
+     preventDefault() вызывается в любом случае и в любом состоянии.
+     Одно нажатие должно срабатывать ОДИН раз: иначе выход из плеера сразу закрывал
+     и карточку релиза (keydown + keyup приходили с разницей больше 120 мс). */
+  var lastReturnHandled = 0;
+  var returnDownAt = 0;
+
   function handleReturn(e, fromUp) {
     e.preventDefault();
+    var ts = (new Date()).getTime();
+
+    if (fromUp) {
+      /* keyup того же нажатия, которое уже обработали на keydown — игнорируем */
+      if (returnDownAt && ts - returnDownAt < 800) return;
+    } else {
+      returnDownAt = ts;
+    }
+    if (ts - lastReturnHandled < 350) return;
+    lastReturnHandled = ts;
 
     /* на главной exit() вызывается из handleKey (keydown) или отложенно из keyup */
     var onHome = !isPlayerOpen() && !TVSettings.isOpen() && !TVSearch.isOpen() &&
