@@ -2068,6 +2068,27 @@
           if (PLAY_DIAG.error) srcMsg += ' · ' + PLAY_DIAG.error;
           $('diag_src').textContent = srcMsg.length > 70 ? srcMsg.substring(0, 70) + '…' : srcMsg;
         }
+        /* Строка «Версия кода» создаётся из JS, чтобы её можно было добавить
+           обновлением с GitHub, не переустанавливая .wgt */
+        var sv = $('settings_view');
+        if (sv && !$('val_code_version')) {
+          var vrow = document.createElement('div');
+          vrow.className = 'setting_row';
+          var vlab = document.createElement('span');
+          vlab.className = 'setting_label';
+          vlab.textContent = 'Версия кода';
+          var vval = document.createElement('span');
+          vval.className = 'setting_value';
+          vval.id = 'val_code_version';
+          vrow.appendChild(vlab);
+          vrow.appendChild(vval);
+          sv.appendChild(vrow);
+        }
+        if ($('val_code_version')) {
+          var bnd = window.ANI_BUNDLE;
+          $('val_code_version').textContent = (bnd && bnd.version)
+            ? (bnd.version + ' (с GitHub)') : 'встроенная';
+        }
       } catch (eDiag) { /* noop */ }
     },
     /* Строка прокси: на ТВ prompt() обычно недоступен — подсказываем, где менять */
