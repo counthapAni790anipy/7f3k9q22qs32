@@ -4757,8 +4757,15 @@
 
   function handleKey(e) {
     var code = e.keyCode || e.which;
-    /* диагностика: какая кнопка пришла последней (видно в настройках) */
-    try { window.__LAST_KEY = { code: code, name: keyNameOf(code) }; } catch (eLk) { /* noop */ }
+    /* диагностика: запоминаем «интересные» кнопки (цифры, цветные, медиа, INFO),
+       чтобы их можно было увидеть в настройках — навигация лог не затирает */
+    try {
+      var interesting = (code >= 48 && code <= 57) || (code >= 96 && code <= 105) ||
+        code === 457 || (code >= 403 && code <= 406) ||
+        code === 412 || code === 415 || code === 417 || code === 19 || code === 179 ||
+        code === 427 || code === 428;
+      if (interesting) window.__LAST_KEY = { code: code, name: keyNameOf(code) };
+    } catch (eLk) { /* noop */ }
 
     if (code === KEY.RETURN) {
       /* RETURN 10009 всегда с preventDefault во всех состояниях */
