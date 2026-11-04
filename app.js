@@ -1829,36 +1829,6 @@
         if (now - self.bufEvents[i] < 120000) fresh.push(self.bufEvents[i]);
       }
       self.bufEvents = fresh;
-      if (self.bufEvents.length >= 3) self.autoDowngrade();
-    },
-
-    /* Автопонижение качества при частой буферизации (один раз за серию) */
-    autoDowngrade: function () {
-      if (!this.opened || this.webMode || this.autoDownDone) return;
-      this.autoDownDone = true;
-      var list = this.qualities || [];
-      if (!list.length) return;
-      var order = ['1080', '720', '480', '360'];
-      var cur = String(this.quality || '');
-      var from = order.indexOf(cur);
-      var next = '';
-      for (var i = from + 1; i < order.length; i++) {
-        if (list.indexOf(order[i]) >= 0) { next = order[i]; break; }
-      }
-      if (!next) return;
-      var pos = this.curTime || 0;
-      var url = this.sourceUrl || this.kodikUrl;
-      if (!url) return;
-      toast('Нестабильная сеть — качество ' + next + 'p', 3000);
-      var item = {
-        id: this.current ? this.current.id : '',
-        title: this.current ? this.current.title : '',
-        poster: this.current ? this.current.poster : '',
-        episode: this.current ? this.current.episode : 1,
-        src: url
-      };
-      if (this.sourceKind === 'libria') this.playLibria(url, item, next, pos);
-      else this.playKodik(url, item, next, pos);
     },
 
     bufferingHide: function () {
