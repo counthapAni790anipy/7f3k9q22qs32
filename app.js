@@ -13,7 +13,8 @@
     /* переключение каналов — в плеере листает серии */
     CHUP: 427, CHDOWN: 428,
     /* цветные кнопки пульта Samsung */
-    RED: 403, GREEN: 404, YELLOW: 405, BLUE: 406
+    RED: 403, GREEN: 404, YELLOW: 405, BLUE: 406,
+    INFO: 457
   };
 
   /* ---------------- Конфиг ---------------- */
@@ -114,6 +115,45 @@
   }
   function storageSet(key, val) {
     try { window.localStorage.setItem(key, val); } catch (e) { /* quota */ }
+  }
+
+  /* ---- кеш с TTL (карточки релизов, источники, серии) ---- */
+  function cacheGet(key) {
+    try {
+      var raw = storageGet(key, '');
+      if (!raw) return null;
+      var obj = JSON.parse(raw);
+      if (!obj || !obj.ts) return null;
+      if ((new Date()).getTime() - obj.ts > (obj.ttl || 900000)) return null;
+      return obj.data;
+    } catch (e) { return null; }
+  }
+
+  function cacheSet(key, data, ttl) {
+    try {
+      storageSet(key, JSON.stringify({
+        ts: (new Date()).getTime(),
+        ttl: ttl || 900000,
+        data: data
+      }));
+    } catch (e) { /* quota */ }
+  }
+
+  /* Удаляем просроченные кеши при запуске */
+  function cachePurge() {
+    try {
+      var drop = [];
+      var now = (new Date()).getTime();
+      for (var i = 0; i < window.localStorage.length; i++) {
+        var k = window.localStorage.key(i);
+        if (!k || k.indexOf('cache_') !== 0) continue;
+        try {
+          var o = JSON.parse(window.localStorage.getItem(k));
+          if (!o || !o.ts || now - o.ts > (o.ttl || 900000)) drop.push(k);
+        } catch (e) { drop.push(k); }
+      }
+      for (var j = 0; j < drop.length; j++) window.localStorage.removeItem(drop[j]);
+    } catch (e2) { /* noop */ }
   }
 
   var toastTimer = null;
@@ -367,6 +407,8 @@
         this.lastRender = ts;
         TVHistory.render();
       }
+      /* блок «Продолжить просмотр» на главной */
+      try { TVContinue.render(); } catch (eCont) { /* noop */ }
     },
 
     find: function (id) {
@@ -497,6 +539,71 @@
         var again = row.querySelector('[data-id="' + focusedId + '"]');
         if (again) TVNavigation.focus(again, true);
       }
+    }
+  };
+
+  /* ==========================================================
+     2a2) TVContinue — блок «Продолжить просмотр» на главной
+     ========================================================== */
+  var TVContinue = {
+    MAX: 8,
+
+    render: function () {
+      var row = $('continue_row');
+      var sec = $('continue_section');
+      if (!row || !sec) return;
+      var list = TVHistory.get();
+      row.innerHTML = '';
+      var focusedId = TVNavigation.current && row.contains(TVNavigation.current) ?
+        TVNavigation.current.getAttribute('data-id') : null;
+      var shown = 0;
+      for (var i = 0; i < list.length && shown < this.MAX; i++) {
+        var h = list[i];
+        if (!h || String(h.id || '').indexOf('anix:') !== 0) continue;
+        var card = document.createElement('div');
+        card.className = 'history_card focusable';
+        card.setAttribute('data-id', String(h.id));
+        card.setAttribute('data-title', h.title || '');
+        if (h.poster) card.style.backgroundImage = 'url("' + h.poster + '")';
+
+        var cover = document.createElement('div');
+        cover.className = 'h_cover';
+        card.appendChild(cover);
+
+        var info = document.createElement('div');
+        info.className = 'h_info';
+        var t = document.createElement('div');
+        t.className = 'h_title';
+        t.textContent = h.title || 'Без названия';
+        var m = document.createElement('div');
+        m.className = 'h_meta';
+        var meta = [];
+        if (h.episode) meta.push(h.episode + ' серия');
+        if (h.time) meta.push(fmt(h.time));
+        m.textContent = meta.join(' · ');
+        info.appendChild(t);
+        info.appendChild(m);
+        card.appendChild(info);
+
+        if (h.time > 0) {
+          var prog = document.createElement('div');
+          prog.className = 'h_prog';
+          var fill = document.createElement('div');
+          fill.className = 'h_prog_fill';
+          fill.style.width = Math.min(100, Math.max(6, Math.floor(h.time / 60))) + '%';
+          prog.appendChild(fill);
+          card.appendChild(prog);
+        }
+        row.appendChild(card);
+        shown++;
+      }
+      if (!shown) { sec.style.display = 'none'; return; }
+      sec.style.display = '';
+      if (focusedId !== null) {
+        var again = row.querySelector('[data-id="' + focusedId + '"]');
+        if (again) TVNavigation.focus(again, true);
+      }
+      if (typeof TVNavigation !== 'undefined') TVNavigation.refresh();
     }
   };
 
@@ -1607,11 +1714,63 @@
     /* Подсказка в плеере: собирается из текущих настроек */
     hintText: function () {
       return 'RETURN — выход &nbsp;|&nbsp; OK — пауза &nbsp;|&nbsp; ← → — ' + this.seekStep() +
-        ' с &nbsp;|&nbsp; ▲▼ — скрыть &nbsp;|&nbsp; CH± — серии &nbsp;|&nbsp; ЖЁЛТАЯ — качество &nbsp;|&nbsp; СИНЯЯ — шаг';
+        ' с &nbsp;|&nbsp; 1–9 — % &nbsp;|&nbsp; ▲▼ — скрыть &nbsp;|&nbsp; CH± — серии &nbsp;|&nbsp; ' +
+        'ЖЁЛТАЯ — качество &nbsp;|&nbsp; СИНЯЯ — шаг &nbsp;|&nbsp; INFO — статистика';
     },
 
     updateHint: function () {
       if ($('p_hint')) $('p_hint').innerHTML = this.hintText();
+    },
+
+    /* Строка под названием: качество, доступные варианты, буфер */
+    updateMeta: function () {
+      var el = $('p_meta');
+      if (!el) return;
+      var parts = [];
+      parts.push(this.quality ? (this.quality === 'auto' ? 'авто' : this.quality + 'p') : 'качество —');
+      if (this.qualities && this.qualities.length) parts.push('доступно ' + this.qualities.join('/'));
+      var bs = parseInt(storageGet('buffer_sec', '10'), 10);
+      parts.push('буфер ' + (bs && bs >= 2 ? bs : 10) + ' с');
+      el.textContent = parts.join(' · ');
+    },
+
+    /* Перемотка в процент длительности (цифры 1–9 на пульте) */
+    seekPercent: function (pct) {
+      if (!this.opened || this.webMode) return;
+      var d = this.duration || 0;
+      if (d <= 0) return;
+      var t = Math.max(0, Math.min(d - 1, d * pct / 100));
+      this.curTime = t;
+      this.updateTimeUI();
+      this.showUI();
+      if (this.mode === 'avplay' && this.avInitialized && getTizenAvplay()) {
+        try { getTizenAvplay().seekTo(Math.floor(t * 1000)); } catch (e) { /* noop */ }
+      } else if (this.video) {
+        try { this.video.currentTime = t; } catch (e2) { /* noop */ }
+      }
+    },
+
+    /* Экран статистики (кнопка INFO) */
+    toggleStats: function () {
+      var el = $('p_stats');
+      if (!el) return;
+      if (el.classList.contains('active')) {
+        el.classList.remove('active');
+        return;
+      }
+      var lines = [];
+      lines.push('Качество: ' + (this.quality || '—') +
+        (this.qualities && this.qualities.length ? '  (доступно ' + this.qualities.join('/') + ')' : ''));
+      var bs = parseInt(storageGet('buffer_sec', '10'), 10) || 10;
+      lines.push('Режим: ' + this.mode + ' · буфер ' + bs + ' с');
+      lines.push('Время: ' + fmt(this.curTime || 0) + ' / ' + fmt(this.duration || 0));
+      lines.push('Поток: ' + String((this.current && this.current.src) || '').replace(/^https?:\/\//, '').slice(0, 90));
+      var bnd = window.ANI_BUNDLE;
+      lines.push('Код: ' + (bnd && bnd.version ? (bnd.version + ' (GitHub)') : 'встроенная'));
+      lines.push('Буферизаций за 2 мин: ' + (this.bufEvents ? this.bufEvents.length : 0));
+      el.textContent = lines.join('\n');
+      el.classList.add('active');
+      this.showUI(true);
     },
 
     /* ---- интерфейс плеера: скрываем через 2 секунды, ▲▼ — вручную ---- */
@@ -1650,6 +1809,46 @@
         var el = $('buffer_pill');
         if (el) el.classList.add('active');
       }, 900);
+
+      /* счётчик буферизаций: если сеть нестабильна — понижаем качество один раз */
+      var now = (new Date()).getTime();
+      self.bufEvents = self.bufEvents || [];
+      self.bufEvents.push(now);
+      var fresh = [];
+      for (var i = 0; i < self.bufEvents.length; i++) {
+        if (now - self.bufEvents[i] < 120000) fresh.push(self.bufEvents[i]);
+      }
+      self.bufEvents = fresh;
+      if (self.bufEvents.length >= 3) self.autoDowngrade();
+    },
+
+    /* Автопонижение качества при частой буферизации (один раз за серию) */
+    autoDowngrade: function () {
+      if (!this.opened || this.webMode || this.autoDownDone) return;
+      this.autoDownDone = true;
+      var list = this.qualities || [];
+      if (!list.length) return;
+      var order = ['1080', '720', '480', '360'];
+      var cur = String(this.quality || '');
+      var from = order.indexOf(cur);
+      var next = '';
+      for (var i = from + 1; i < order.length; i++) {
+        if (list.indexOf(order[i]) >= 0) { next = order[i]; break; }
+      }
+      if (!next) return;
+      var pos = this.curTime || 0;
+      var url = this.sourceUrl || this.kodikUrl;
+      if (!url) return;
+      toast('Нестабильная сеть — качество ' + next + 'p', 3000);
+      var item = {
+        id: this.current ? this.current.id : '',
+        title: this.current ? this.current.title : '',
+        poster: this.current ? this.current.poster : '',
+        episode: this.current ? this.current.episode : 1,
+        src: url
+      };
+      if (this.sourceKind === 'libria') this.playLibria(url, item, next, pos);
+      else this.playKodik(url, item, next, pos);
     },
 
     bufferingHide: function () {
@@ -1826,12 +2025,17 @@
 
       self.opened = true;
       self.paused = false;
+      self.autoDownDone = false;
+      self.bufEvents = [];
+      var statEl = $('p_stats');
+      if (statEl) statEl.classList.remove('active');
       self.curTime = resume || 0;
       self.duration = 0;
       Loader.show('Загрузка...');
       self.container.classList.add('active');
       if ($('p_title')) $('p_title').textContent = item.title || 'Без названия';
       self.updateHint();
+      self.updateMeta();
       self.showUI();
       self.updateTimeUI();
 
@@ -1996,6 +2200,7 @@
         self.sourceUrl = url;
         self.qualities = picked.available || [];
         self.quality = picked.quality || '';
+        self.updateMeta();
       }).catch(function (e) {
         Loader.hide();
         PLAY_DIAG.error = 'API ' + (LIBRIA_DIAG.api || '—') + ' / страница ' + (LIBRIA_DIAG.page || '—');
@@ -2043,6 +2248,7 @@
         self.sourceUrl = url;
         self.qualities = picked.available || [];
         self.quality = picked.quality || '';
+        self.updateMeta();
       }).catch(function (e) {
         stopLoader();
         Loader.hide();
@@ -2062,7 +2268,7 @@
       if (!this.opened || this.webMode) return;
       var list = (this.qualities && this.qualities.length) ? this.qualities.slice() : [];
       if (!list.length) { toast('Качество недоступно'); return; }
-      this.menuItems = ['auto'].concat(list);
+      this.menuItems = ['auto'].concat(list).concat(['restart']);
       var idx = this.menuItems.indexOf(this.quality);
       this.menuIndex = idx >= 0 ? idx : 0;
       this.menuOpen = true;
@@ -2079,7 +2285,8 @@
         var it = this.menuItems[i];
         var row = document.createElement('div');
         row.className = 'qm_item' + (i === this.menuIndex ? ' active' : '');
-        row.textContent = it === 'auto' ? 'Авто (лучшее)' : (it + 'p');
+        row.textContent = it === 'auto' ? 'Авто (лучшее)'
+          : (it === 'restart' ? 'С начала' : (it + 'p'));
         box.appendChild(row);
       }
     },
@@ -2105,6 +2312,11 @@
       var url = this.sourceUrl || this.kodikUrl;
       var kind = this.sourceKind || 'kodik';
       this.hideQualityMenu();
+      if (q === 'restart') {
+        this.seekPercent(0);
+        toast('Начинаем сначала', 2000);
+        return;
+      }
       storageSet('video_quality', q);
       if (!url) return;
       var item = {
@@ -2239,6 +2451,8 @@
       }
       this.render();
       hideListViews();
+      var nv = $('net_view');
+      if (nv) nv.style.display = 'none';
       s.style.display = 'flex';
       m.style.display = 'none';
       TVNavigation.focus(s.querySelector('.focusable'));
@@ -2271,6 +2485,9 @@
         $('val_buffer_sec').textContent = (bs && bs >= 2 ? bs : 10) + ' сек';
       }
       if ($('val_seek_step')) $('val_seek_step').textContent = TVPlayer.seekStep() + ' с';
+      if ($('val_hide_watched')) {
+        $('val_hide_watched').textContent = storageGet('hide_watched', '0') === '1' ? 'вкл' : 'выкл';
+      }
       /* диагностика сетевых возможностей для плеера Kodik */
       try {
         var d = kodikDiag();
@@ -2391,6 +2608,11 @@
         var si = so.indexOf(cs);
         if (si < 0) si = 0;
         storageSet('seek_step', String(so[(si + 1) % so.length]));
+      } else if (what === 'hide_watched') {
+        var hw = storageGet('hide_watched', '0') === '1' ? '0' : '1';
+        storageSet('hide_watched', hw);
+        toast(hw === '1' ? 'Просмотренное скрыто' : 'Просмотренное показывается', 2000);
+        if (TVList.current) TVList.show(TVList.current);
       } else if (what === 'clear_history' || what === 'clear_bookmarks') {
         this.askClear(what);
         return;
@@ -2923,18 +3145,32 @@
       TVNavigation.focusIn($('release_view'));
       Loader.show('Загрузка релиза...');
 
+      /* кеш карточки релиза: повторный вход — мгновенно */
+      var cached = cacheGet('cache_release_' + id);
+      if (cached && cached.rel) {
+        Loader.hide();
+        self.rel = cached.rel;
+        self.renderInfo();
+        self.types = cached.types || [];
+        self.typeIndex = self.pickSavedIndex(self.types, 'last_type_id');
+        self.applyType();
+        return;
+      }
+
       AnixApi.release(id).then(function (rel) {
         self.rel = rel;
         self.renderInfo();
         return AnixApi.types(id);
       }).then(function (types) {
         self.types = types || [];
+        cacheSet('cache_release_' + id, { rel: self.rel, types: self.types }, 15 * 60 * 1000);
         /* вспоминаем озвучку, выбранную в прошлый раз */
         self.typeIndex = self.pickSavedIndex(self.types, 'last_type_id');
         self.applyType();
       }).catch(function (e) {
         Loader.hide();
         if ($('rel_title')) $('rel_title').textContent = 'Ошибка загрузки';
+        TVError.show('Не удалось загрузить релиз', function () { TVRelease.open(id); });
         toast('Не удалось загрузить релиз: ' + ((e && e.message) || 'сеть'));
       });
     },
@@ -3082,6 +3318,14 @@
         Loader.hide();
         return;
       }
+      var srcKey = 'cache_sources_' + self.rel.id + '_' + t.id;
+      var cachedSrc = cacheGet(srcKey);
+      if (cachedSrc) {
+        self.sources = cachedSrc;
+        self.sourceIndex = self.pickSavedIndex(self.sources, 'last_source_id');
+        self.applySource();
+        return;
+      }
       AnixApi.sources(self.rel.id, t.id).then(function (srcs) {
         var all = srcs || [];
         /* Libria отключена: её CDN не пускает телевизор (XHR 404/503) */
@@ -3092,6 +3336,7 @@
         if (all.length && !list.length) {
           toast('Источник Libria отключён — других нет', 3500);
         }
+        cacheSet(srcKey, list, 10 * 60 * 1000);
         self.sources = list;
         /* вспоминаем источник, выбранный в прошлый раз */
         self.sourceIndex = self.pickSavedIndex(self.sources, 'last_source_id');
@@ -3115,6 +3360,14 @@
         return;
       }
       var t = self.types[self.typeIndex];
+      var epKey = 'cache_eps_' + self.rel.id + '_' + t.id + '_' + s.id;
+      var cachedEps = cacheGet(epKey);
+      if (cachedEps && cachedEps.length) {
+        Loader.hide();
+        self.episodes = cachedEps;
+        self.renderEpisodes();
+        return;
+      }
       AnixApi.episodes(self.rel.id, t.id, s.id).then(function (eps) {
         Loader.hide();
         var arr = eps || [];
@@ -3124,7 +3377,16 @@
           if (!/libria\.fun/i.test(String(arr[i] && arr[i].url || ''))) clean.push(arr[i]);
         }
         self.episodes = clean.length ? clean : arr;
+        if (self.episodes.length) cacheSet(epKey, self.episodes, 10 * 60 * 1000);
         self.renderEpisodes();
+        /* прогреваем ссылку первой серии, чтобы старт был быстрым */
+        if (self.episodes.length && kodikParse(self.episodes[0].url)) {
+          setTimeout(function () {
+            try {
+              TVPlayer.resolveKodik(self.episodes[0].url, TVPlayer.qualityPref()).catch(function () {});
+            } catch (e0) { /* noop */ }
+          }, 1200);
+        }
       }).catch(function (e) {
         Loader.hide();
         fillReleaseRow($('rel_eps'), [], 'Ошибка загрузки серий');
@@ -3374,6 +3636,150 @@
           try { TVPlayer.resolveKodik(nextEp.url, TVPlayer.qualityPref()).catch(function () {}); } catch (e) {}
         }, 3000);
       }
+    }
+  };
+
+  /* ==========================================================
+     Единое окно ошибки с кнопкой «Повторить»
+     ========================================================== */
+  var TVError = {
+    open: false,
+    retry: null,
+
+    ensure: function () {
+      var box = $('error_box');
+      if (box) return box;
+      box = document.createElement('div');
+      box.id = 'error_box';
+      box.style.position = 'fixed';
+      box.style.left = '50%';
+      box.style.top = '42%';
+      box.style.transform = 'translate(-50%, -50%)';
+      box.style.width = '760px';
+      box.style.zIndex = '160';
+      box.style.padding = '28px 34px';
+      box.style.borderRadius = '14px';
+      box.style.background = 'rgba(16, 16, 22, 0.97)';
+      box.style.border = '2px solid #2a2a36';
+      box.style.display = 'none';
+      box.style.textAlign = 'center';
+
+      var title = document.createElement('div');
+      title.id = 'error_title';
+      title.style.fontSize = '30px';
+      title.style.fontWeight = '600';
+      title.style.marginBottom = '14px';
+
+      var hint = document.createElement('div');
+      hint.className = 'qm_hint';
+      hint.textContent = 'OK — повторить · RETURN — закрыть';
+
+      box.appendChild(title);
+      box.appendChild(hint);
+      document.body.appendChild(box);
+      return box;
+    },
+
+    show: function (title, retry) {
+      var box = this.ensure();
+      this.open = true;
+      this.retry = retry || null;
+      if ($('error_title')) $('error_title').textContent = title || 'Ошибка';
+      box.style.display = 'block';
+    },
+
+    close: function () {
+      this.open = false;
+      this.retry = null;
+      var box = $('error_box');
+      if (box) box.style.display = 'none';
+    },
+
+    run: function () {
+      var fn = this.retry;
+      this.close();
+      if (fn) { try { fn(); } catch (e) { /* noop */ } }
+    }
+  };
+
+  /* ==========================================================
+     Диагностика сети: реальные запросы с телевизора
+     ========================================================== */
+  var TVNetDiag = {
+    results: { api: '', pages: '', kodik: '' },
+    busy: false,
+
+    isOpen: function () {
+      var v = $('net_view');
+      return !!v && v.style.display === 'flex';
+    },
+
+    show: function () {
+      var v = $('net_view');
+      var m = $('main_view');
+      var s = $('settings_view');
+      if (!v) return;
+      hideListViews();
+      if (m) m.style.display = 'none';
+      if (s) s.style.display = 'none';
+      v.style.display = 'flex';
+      this.render();
+      TVNavigation.refresh();
+      if ($('net_run')) TVNavigation.focus($('net_run'), true);
+      this.run();
+    },
+
+    hide: function () {
+      var v = $('net_view');
+      if (!v) return;
+      v.style.display = 'none';
+      TVSettings.show(true);
+    },
+
+    render: function () {
+      if ($('net_api')) $('net_api').textContent = this.results.api || '—';
+      if ($('net_pages')) $('net_pages').textContent = this.results.pages || '—';
+      if ($('net_kodik')) $('net_kodik').textContent = this.results.kodik || '—';
+      if ($('net_version')) {
+        var bnd = window.ANI_BUNDLE;
+        $('net_version').textContent = (bnd && bnd.version) ? (bnd.version + ' (с GitHub)') : 'встроенная';
+      }
+    },
+
+    check: function (key, url, expect) {
+      var self = this;
+      var t0 = (new Date()).getTime();
+      self.results[key] = 'проверка...';
+      self.render();
+      return kodikHttpGet(url, 9000).then(function (txt) {
+        var ms = (new Date()).getTime() - t0;
+        var ok = expect ? expect(txt) : true;
+        self.results[key] = ok ? ('OK · ' + ms + ' мс') : ('ответ без данных · ' + ms + ' мс');
+        self.render();
+      }).catch(function (e) {
+        var ms = (new Date()).getTime() - t0;
+        self.results[key] = ((e && e.message) || 'ошибка') + ' · ' + ms + ' мс';
+        self.render();
+      });
+    },
+
+    run: function () {
+      if (this.busy) return;
+      this.busy = true;
+      var self = this;
+      var base = (window.ANI_BUNDLE && window.ANI_BUNDLE.base) ||
+        'https://counthapAni790anipy.github.io/7f3k9q22qs32/';
+      Promise.all([
+        self.check('api', 'https://api.anixsekai.com/release/random', function (t) {
+          return t && t.indexOf('"release"') >= 0;
+        }),
+        self.check('pages', base + 'manifest.json?t=' + (new Date()).getTime(), function (t) {
+          return t && t.indexOf('version') >= 0;
+        }),
+        self.check('kodik', 'https://kodikplayer.com/ftor?hash=ead7d029724d16a6d0440cf6786e2226&id=176238&type=seria', function (t) {
+          return t && t.indexOf('links') >= 0;
+        })
+      ]).then(function () { self.busy = false; }, function () { self.busy = false; });
     }
   };
 
@@ -3652,6 +4058,69 @@
       if (grid) grid.innerHTML = '<div class="history_empty">Загрузка каталога...</div>';
     },
 
+    /* ---- скрытие просмотренного ---- */
+    LIMIT: 40,
+    limits: {},
+
+    hideWatchedOn: function () {
+      return storageGet('hide_watched', '0') === '1';
+    },
+
+    watchedIds: function () {
+      var map = {};
+      var list = TVHistory.get();
+      for (var i = 0; i < list.length; i++) {
+        var id = String(list[i].id || '');
+        if (id.indexOf('anix:') === 0) map[id.slice(5)] = 1;
+      }
+      return map;
+    },
+
+    dropWatched: function (list) {
+      if (!this.hideWatchedOn()) return list;
+      var map = this.watchedIds();
+      var out = [];
+      for (var i = 0; i < list.length; i++) {
+        if (!map[String(list[i].id)]) out.push(list[i]);
+      }
+      return out;
+    },
+
+    /* ---- сетка с догрузкой («Показать ещё») ---- */
+    paint: function (grid, kind, list, emptyText, metaFn) {
+      if (!grid) return;
+      var total = list.length;
+      var limit = this.limits[kind] || this.LIMIT;
+      var part = list.slice(0, limit);
+      fillReleaseRow(grid, part, emptyText, metaFn);
+      if (total > part.length) {
+        var more = document.createElement('div');
+        more.className = 'history_card focusable';
+        more.setAttribute('data-more', kind);
+        var info = document.createElement('div');
+        info.className = 'h_info';
+        var t = document.createElement('div');
+        t.className = 'h_title';
+        t.textContent = 'Показать ещё';
+        var m = document.createElement('div');
+        m.className = 'h_meta';
+        m.textContent = 'ещё ' + (total - part.length);
+        info.appendChild(t);
+        info.appendChild(m);
+        more.appendChild(info);
+        grid.appendChild(more);
+      }
+    },
+
+    showMore: function (kind) {
+      this.limits[kind] = (this.limits[kind] || this.LIMIT) + this.LIMIT;
+      var row = $('main_view');
+      if (kind === 'popular') this.renderPopular();
+      else if (kind === 'schedule') this.renderSchedule();
+      else if (kind === 'collection') this.renderCollection();
+      else if (kind === 'filters') this.renderFilterResults();
+    },
+
     /* После загрузки пула: если раздел ещё открыт и фокус на пункте меню — ведём на карточку */
     afterLoad: function (kind, grid) {
       if (TVList.current !== kind) return;
@@ -3670,7 +4139,8 @@
         var list = items.slice();
         list.sort(function (a, b) { return (b.grade - a.grade) || (b.vote_count - a.vote_count); });
         list = list.filter(function (x) { return x.grade > 0 && x.vote_count >= 50; });
-        fillReleaseRow(grid, list.slice(0, 40), 'Нет данных');
+        list = self.dropWatched(list);
+        self.paint(grid, 'popular', list, 'Нет данных');
         TVNavigation.refresh();
         self.afterLoad('popular', grid);
       });
@@ -3689,7 +4159,8 @@
           if (self.dateOf(items[i]) > 0) list.push(items[i]);
         }
         list.sort(function (a, b) { return self.dateOf(b) - self.dateOf(a); });
-        fillReleaseRow(grid, list.slice(0, 40), 'Дат выхода в каталоге нет', function (rel) {
+        list = self.dropWatched(list);
+        self.paint(grid, 'schedule', list, 'Дат выхода в каталоге нет', function (rel) {
           return self.scheduleMeta(rel);
         });
         TVNavigation.refresh();
@@ -3770,7 +4241,8 @@
       if (!TVCatalog.items.length) self.loading(grid);
       TVCatalog.ensure().then(function (items) {
         var list = self.collectionItems(items, self.collection);
-        fillReleaseRow(grid, list.slice(0, 60), 'В коллекции пока пусто');
+        list = self.dropWatched(list);
+        self.paint(grid, 'collection', list, 'В коллекции пока пусто');
         TVNavigation.refresh();
         self.afterLoad('collection', grid);
       });
@@ -3880,6 +4352,7 @@
       } else {
         list.sort(function (a, b) { return b.grade - a.grade; });
       }
+      list = self.dropWatched(list);
       fillReleaseRow(grid, list.slice(0, 60), 'Ничего не найдено — измените фильтры');
       TVNavigation.refresh();
     }
@@ -3939,6 +4412,12 @@
 
     if (isRepeat(e, KEY.RETURN)) return;
 
+    /* окно ошибки: RETURN закрывает */
+    if (TVError.open) {
+      TVError.close();
+      return;
+    }
+
     /* RETURN в подменю выбора (озвучка/источник) закрывает только его */
     if (TVChoice.open) {
       TVChoice.close();
@@ -3957,6 +4436,10 @@
     }
     if (TVRelease.isRelatedOpen()) {
       TVRelease.closeRelated();
+      return;
+    }
+    if (TVNetDiag.isOpen()) {
+      TVNetDiag.hide();
       return;
     }
     if (TVRelease.isOpen()) {
@@ -4180,6 +4663,10 @@
     if (el.id === 'rel_related_btn') { TVRelease.openRelated(); return; }
     if (el.id === 'rel_back') { TVRelease.hide(); return; }
     if (el.id === 'settings_back') { TVSettings.hide(); return; }
+    if (el.id === 'net_open') { TVNetDiag.show(); return; }
+    if (el.id === 'net_run') { TVNetDiag.run(); return; }
+    if (el.id === 'net_back') { TVNetDiag.hide(); return; }
+    if (el.hasAttribute('data-more')) { TVSections.showMore(el.getAttribute('data-more')); return; }
 
     if (el.classList.contains('ep_btn')) {
       TVRelease.playIndex(parseInt(el.getAttribute('data-ep'), 10));
@@ -4240,6 +4727,14 @@
     }
 
     /* подменю выбора (озвучка/источник): ▲▼ — навигация, OK — применить */
+    if (TVError.open) {
+      if (code === KEY.ENTER) {
+        e.preventDefault();
+        TVError.run();
+      }
+      return;
+    }
+
     if (TVChoice.open) {
       if (code === KEY.UP || code === KEY.DOWN) {
         e.preventDefault();
@@ -4278,6 +4773,18 @@
       if (code === KEY.CHUP || code === KEY.CHDOWN) {
         e.preventDefault();
         TVRelease.switchEpisode(code === KEY.CHUP ? 1 : -1);
+        return;
+      }
+      /* INFO — статистика плеера */
+      if (code === KEY.INFO) {
+        e.preventDefault();
+        TVPlayer.toggleStats();
+        return;
+      }
+      /* цифры 1–9 — переход к 10–90 % длительности */
+      if (code >= 49 && code <= 57 && !TVPlayer.webMode) {
+        e.preventDefault();
+        TVPlayer.seekPercent((code - 48) * 10);
         return;
       }
       /* ▲ ▼ — скрыть/показать интерфейс (вместо перемотки) */
@@ -4398,6 +4905,8 @@
       TVSettings.render();
       TVHistory.render();
       TVBookmarks.render();
+      TVContinue.render();
+      cachePurge();
     } catch (eCore) { /* noop */ }
 
     /* События UI: один делегированный обработчик — пульт и мышь ведут себя одинаково */
@@ -4455,6 +4964,9 @@
   window.TVSearch = TVSearch;
   window.TVRelease = TVRelease;
   window.TVChoice = TVChoice;
+  window.TVContinue = TVContinue;
+  window.TVError = TVError;
+  window.TVNetDiag = TVNetDiag;
   /* для проверок: разбор и раскодирование ссылок Kodik */
   window.kodikParse = kodikParse;
   window.kodikDecodeLink = kodikDecodeLink;
