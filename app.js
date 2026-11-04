@@ -4034,13 +4034,43 @@
         }
 
         next();
+        /* страховка: если один из запросов «завис» без таймаута, отдаём то, что успели */
+        setTimeout(finish, 15000);
       });
       return self.loading;
     },
 
+    /* Догрузка случайными релизами, если поиск по буквам не дал ничего */
+    randomFallback: function () {
+      var self = this;
+      var out = [];
+      var reqs = [];
+      for (var i = 0; i < 6; i++) {
+        reqs.push(AnixApi.random().then(function (rel) {
+          if (rel && rel.id) out.push(self.slim(rel));
+        }).catch(function () { /* noop */ }));
+      }
+      return Promise.all(reqs).then(function () {
+        if (out.length) self.items = out;
+        return out;
+      });
+    },
+
     ensure: function () {
-      if (this.items.length) return Promise.resolve(this.items);
-      return this.load();
+      var self = this;
+      if (self.items.length) return Promise.resolve(self.items);
+      function once() {
+        return self.load().catch(function () { return []; });
+      }
+      return once().then(function (list) {
+        if (list && list.length) return list;
+        /* пустой каталог — одна автоматическая повторная попытка */
+        self.loading = null;
+        return once().then(function (list2) {
+          if (list2 && list2.length) return list2;
+          return self.randomFallback();
+        });
+      });
     }
   };
 
@@ -4243,10 +4273,37 @@
       if (!box) return;
       if ($('sched_filter_val')) $('sched_filter_val').textContent = this.filterLabel();
       if ($('sched_sort_val')) $('sched_sort_val').textContent = this.sortLabel();
-      if (!TVCatalog.items.length) box.innerHTML = '<div class="history_empty">Загрузка каталога...</div>';
+      if (!TVCatalog.items.length) {
+        box.innerHTML = '<div class="history_empty">Загрузка каталога...</div>';
+        if ($('sched_counter')) $('sched_counter').textContent = 'Загрузка каталога...';
+      }
+
+      /* страховка: если каталог не ответил за 20 с — показываем ошибку с повтором */
+      var done = false;
+      var guard = setTimeout(function () {
+        if (done) return;
+        done = true;
+        if ($('sched_counter')) $('sched_counter').textContent = 'Каталог не ответил';
+        box.innerHTML = '<div class="history_empty">Каталог не ответил — OK, чтобы повторить</div>';
+        TVError.show('Не удалось загрузить каталог', function () {
+          TVCatalog.loading = null;
+          TVSchedule.render();
+        });
+      }, 20000);
 
       TVCatalog.ensure().then(function (items) {
+        done = true;
+        clearTimeout(guard);
         var all = items.slice();
+        if (!all.length) {
+          box.innerHTML = '<div class="history_empty">Каталог пуст — проверьте сеть</div>';
+          if ($('sched_counter')) $('sched_counter').textContent = 'Каталог пуст';
+          TVError.show('Каталог не загрузился', function () {
+            TVCatalog.loading = null;
+            TVSchedule.render();
+          });
+          return;
+        }
         var ongoing = 0;
         for (var i = 0; i < all.length; i++) {
           if (self.isOngoing(all[i])) ongoing++;
@@ -4317,6 +4374,15 @@
           var first = box.querySelector('.focusable');
           if (first) TVNavigation.focus(first, true);
         }
+      }).catch(function (e) {
+        done = true;
+        clearTimeout(guard);
+        box.innerHTML = '<div class="history_empty">Ошибка загрузки каталога</div>';
+        if ($('sched_counter')) $('sched_counter').textContent = 'Ошибка загрузки';
+        TVError.show('Не удалось загрузить каталог', function () {
+          TVCatalog.loading = null;
+          TVSchedule.render();
+        });
       });
     },
 
