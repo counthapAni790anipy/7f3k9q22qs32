@@ -5,6 +5,9 @@
 (function () {
   'use strict';
 
+  /* Версия встроенной копии; publish.ps1 подставляет актуальную */
+  var APP_VERSION = '1.0';
+
   var KEY = {
     LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40,
     ENTER: 13, RETURN: 10009,
@@ -4759,6 +4762,15 @@
     return true;
   }
 
+  /* Версия виджета внизу левой панели */
+  function updateSidebarVersion() {
+    var el = $('sidebar_version');
+    if (!el) return;
+    var bnd = window.ANI_BUNDLE;
+    var ver = (bnd && bnd.version) ? String(bnd.version) : APP_VERSION;
+    el.textContent = 'AniOnline v' + ver + (bnd && bnd.version ? ' · GitHub' : '');
+  }
+
   /* Нормальные имена клавиш (Tizen 2.4+: tizen.tvinputdevice.getKeyName) */
   function keyNameOf(code) {
     try {
@@ -5240,6 +5252,7 @@
       TVBookmarks.render();
       TVContinue.render();
       TVFollowMain.render();
+      updateSidebarVersion();
       cachePurge();
     } catch (eCore) { /* noop */ }
 
@@ -5303,6 +5316,7 @@
   window.TVNetDiag = TVNetDiag;
   window.TVFollow = TVFollow;
   window.TVFollowMain = TVFollowMain;
+  window.updateSidebarVersion = updateSidebarVersion;
   /* для проверок: разбор и раскодирование ссылок Kodik */
   window.kodikParse = kodikParse;
   window.kodikDecodeLink = kodikDecodeLink;
