@@ -4176,7 +4176,30 @@
      TVFollowMain — блок «Отслеживаемые релизы» на главной
      ========================================================== */
   var TVFollowMain = {
+    /* Секция на главной: если её нет в разметке (старая установка), создаём сами */
+    ensureSection: function () {
+      if ($('follow_section') && $('follow_row')) return;
+      var main = $('main_view');
+      if (!main || $('follow_section')) return;
+      var sec = document.createElement('section');
+      sec.className = 'section';
+      sec.id = 'follow_section';
+      var h = document.createElement('h2');
+      h.className = 'section_title';
+      h.textContent = 'Отслеживаемые релизы';
+      var row = document.createElement('div');
+      row.id = 'follow_row';
+      row.className = 'history_row';
+      sec.appendChild(h);
+      sec.appendChild(row);
+      var random = $('random_row');
+      var anchor = random ? random.parentNode : null;
+      if (anchor && anchor.parentNode === main) main.insertBefore(sec, anchor);
+      else main.insertBefore(sec, main.firstChild);
+    },
+
     render: function () {
+      this.ensureSection();
       var row = $('follow_row');
       var sec = $('follow_section');
       if (!row || !sec) return;
@@ -4250,8 +4273,13 @@
         row.appendChild(card);
         shown++;
       }
-      if (!shown) { sec.style.display = 'none'; return; }
       sec.style.display = '';
+      if (!shown) {
+        var hint = document.createElement('div');
+        hint.className = 'history_empty';
+        hint.textContent = 'Пока пусто — откройте релиз и нажмите «Следить»';
+        row.appendChild(hint);
+      }
       TVNavigation.refresh();
     },
 
