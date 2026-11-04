@@ -2498,6 +2498,10 @@
       if ($('val_hide_watched')) {
         $('val_hide_watched').textContent = storageGet('hide_watched', '0') === '1' ? 'вкл' : 'выкл';
       }
+      if ($('val_last_key')) {
+        var lk = window.__LAST_KEY;
+        $('val_last_key').textContent = lk ? (lk.code + (lk.name ? ' · ' + lk.name : '')) : '—';
+      }
       /* диагностика сетевых возможностей для плеера Kodik */
       try {
         var d = kodikDiag();
@@ -4732,6 +4736,8 @@
 
   function handleKey(e) {
     var code = e.keyCode || e.which;
+    /* диагностика: какая кнопка пришла последней (видно в настройках) */
+    try { window.__LAST_KEY = { code: code, name: keyNameOf(code) }; } catch (eLk) { /* noop */ }
 
     if (code === KEY.RETURN) {
       /* RETURN 10009 всегда с preventDefault во всех состояниях */
@@ -4807,10 +4813,10 @@
         TVRelease.switchEpisode(code === KEY.CHUP ? 1 : -1);
         return;
       }
-      /* INFO — статистика плеера */
+      /* INFO — статистика плеера (keydown и keyup, с защитой от двойного срабатывания) */
       if (code === KEY.INFO) {
         e.preventDefault();
-        TVPlayer.toggleStats();
+        toggleInfoOnce();
         return;
       }
       /* цифры 1–9 — переход к 10–90 % длительности */
@@ -4874,12 +4880,24 @@
     }
   }
 
-  /* RETURN обычно приходит на keyup — обрабатываем и его, без двойного срабатывания */
+  /* RETURN обычно приходит на keyup — обрабатываем и его, без двойного срабатывания.
+     INFO на части пультов тоже приходит на keyup. */
+  var lastInfoAt = 0;
+  function toggleInfoOnce() {
+    var now = (new Date()).getTime();
+    if (now - lastInfoAt < 300) return;
+    lastInfoAt = now;
+    if (isPlayerOpen()) TVPlayer.toggleStats();
+  }
+
   function handleMediaKey(e) {
     var code = e.keyCode || e.which;
     if (code === KEY.RETURN) {
       e.preventDefault();
       handleReturn(e, true);
+    } else if (code === KEY.INFO) {
+      e.preventDefault();
+      toggleInfoOnce();
     }
   }
 
@@ -4903,6 +4921,8 @@
        Остальные мультимедиа- и цветные кнопки нужны приложению. */
     var keys = [
       'MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaFastForward', 'MediaRewind', 'MediaStop',
+      /* INFO — статистика плеера (на части пультов приходит только после регистрации) */
+      'Info', 'Tools', 'Guide',
       /* каналы в плеере листают серии */
       'ChannelUp', 'ChannelDown',
       /* цветные кнопки: GREEN — закладка, RED — удалить запись, YELLOW — качество, BLUE — шаг перемотки */
