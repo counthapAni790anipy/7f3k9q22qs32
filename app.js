@@ -3228,9 +3228,16 @@
     toggleFollow: function () {
       var self = this;
       if (!self.rel) return;
-      var on = TVFollow.toggle(self.rel.id, self.rel.episodes_released);
+      var on = TVFollow.toggle(self.rel.id, {
+        id: self.rel.id,
+        title: self.rel.title_ru || releaseTitle(self.rel),
+        image: self.rel.image || '',
+        episodes_total: Number(self.rel.episodes_total) || 0,
+        episodes_released: Number(self.rel.episodes_released) || 0
+      });
       self.renderFollowButton();
-      toast(on ? 'Добавлено в «Следить»' : 'Убрано из «Следить»', 2200);
+      TVFollowMain.render();
+      toast(on ? 'Добавлено в «Отслеживаемые»' : 'Убрано из «Отслеживаемых»', 2200);
     },
 
     /* Заполнить секцию доп. релизов; пустую — скрыть вместе с заголовком */
@@ -3846,7 +3853,6 @@
       bookmarks: 'bookmarks_view',
       history: 'history_view',
       popular: 'popular_view',
-      schedule: 'schedule_view',
       collections: 'collections_view',
       collection: 'collection_view',
       filters: 'filters_view'
@@ -3855,7 +3861,6 @@
       bookmarks: 'bookmark_row',
       history: 'history_row',
       popular: 'popular_grid',
-      schedule: 'schedule_groups',
       collections: 'collections_grid',
       collection: 'collection_grid',
       filters: 'filter_grid'
@@ -4116,7 +4121,7 @@
       } catch (e) { return 0; }
     },
 
-    toggle: function (id, released) {
+    toggle: function (id, meta) {
       id = Number(id);
       if (!id) return false;
       var list = this.list();
@@ -4131,6 +4136,8 @@
       } else {
         list.unshift(id);
         on = true;
+        var released = meta && typeof meta === 'object' ? meta.episodes_released : meta;
+        if (meta && typeof meta === 'object') this.setMeta(meta);
         this.snapshot(id, released);
       }
       if (list.length > 200) list = list.slice(0, 200);
@@ -4139,353 +4146,123 @@
     }
   };
 
+  /* Метаданные отслеживаемых релизов — главная рисуется без каталога */
+  TVFollow.META = 'followed_meta';
+
+  TVFollow.setMeta = function (meta) {
+    if (!meta || !meta.id) return;
+    try {
+      var map = JSON.parse(storageGet(this.META, '{}'));
+      if (!map || typeof map !== 'object') map = {};
+      map[String(meta.id)] = {
+        id: Number(meta.id),
+        title: meta.title || '',
+        image: meta.image || '',
+        episodes_total: Number(meta.episodes_total) || 0,
+        episodes_released: Number(meta.episodes_released) || 0
+      };
+      storageSet(this.META, JSON.stringify(map));
+    } catch (e) { /* quota */ }
+  };
+
+  TVFollow.metaOf = function (id) {
+    try {
+      var map = JSON.parse(storageGet(this.META, '{}'));
+      return (map && map[String(id)]) || null;
+    } catch (e) { return null; }
+  };
+
   /* ==========================================================
-     TVSchedule — вкладка «Обновления»
-     Группы по времени, фильтры, сортировка, «Следить» и бейджи.
+     TVFollowMain — блок «Отслеживаемые релизы» на главной
      ========================================================== */
-  var TVSchedule = {
-    filter: storageGet('sched_filter', 'all'),
-    sort: storageGet('sched_sort', 'updated'),
+  var TVFollowMain = {
+    render: function () {
+      var row = $('follow_row');
+      var sec = $('follow_section');
+      if (!row || !sec) return;
+      var ids = TVFollow.list();
+      row.innerHTML = '';
+      var shown = 0;
+      for (var i = 0; i < ids.length; i++) {
+        var id = Number(ids[i]);
+        if (!id) continue;
+        var meta = TVFollow.metaOf(id) || {};
+        for (var c = 0; c < TVCatalog.items.length; c++) {
+          if (Number(TVCatalog.items[c].id) === id) {
+            var it = TVCatalog.items[c];
+            meta = {
+              id: id,
+              title: it.title_ru || meta.title || '',
+              image: it.image || meta.image || '',
+              episodes_total: Number(it.episodes_total) || meta.episodes_total || 0,
+              episodes_released: Number(it.episodes_released) || meta.episodes_released || 0
+            };
+            break;
+          }
+        }
 
-    FILTER_OPTIONS: ['Все', 'Онгоинги', 'Завершённые'],
-    SORT_OPTIONS: ['По обновлению', 'По популярности', 'По рейтингу'],
+        var card = document.createElement('div');
+        card.className = 'history_card focusable';
+        card.setAttribute('data-id', 'anix:' + id);
+        card.setAttribute('data-follow', String(id));
+        if (meta.image) card.style.backgroundImage = 'url("' + meta.image + '")';
 
-    updatedAt: function (rel) {
-      var t = Number(rel.last_update_date) || 0;
-      if (t > 0) return t * 1000;
-      return TVSections.dateOf(rel);
-    },
+        var cover = document.createElement('div');
+        cover.className = 'h_cover';
+        card.appendChild(cover);
 
-    isOngoing: function (rel) {
-      var total = Number(rel.episodes_total) || 0;
-      var out = Number(rel.episodes_released) || 0;
-      if (total > 0) return out < total;
-      return Number(rel.status_id) === 2;
-    },
+        var info = document.createElement('div');
+        info.className = 'h_info';
+        var t = document.createElement('div');
+        t.className = 'h_title';
+        t.textContent = meta.title || ('Релиз ' + id);
+        var m = document.createElement('div');
+        m.className = 'h_meta';
+        var total = Number(meta.episodes_total) || 0;
+        var out = Number(meta.episodes_released) || 0;
+        var metaParts = [];
+        if (total) metaParts.push(out + '/' + total);
+        else if (out) metaParts.push('эп. ' + out);
+        var badge = TVFollow.badge(id, out);
+        if (badge > 0) metaParts.push('+' + badge + ' новых');
+        m.textContent = metaParts.join(' · ') || 'Отслеживается';
+        info.appendChild(t);
+        info.appendChild(m);
+        card.appendChild(info);
 
-    filterLabel: function () {
-      if (this.filter === 'ongoing') return 'Онгоинги';
-      if (this.filter === 'finished') return 'Завершённые';
-      return 'Все';
-    },
+        if (total > 0) {
+          var prog = document.createElement('div');
+          prog.className = 'h_prog';
+          var fill = document.createElement('div');
+          fill.className = 'h_prog_fill';
+          fill.style.width = Math.max(4, Math.min(100, Math.round(out / total * 100))) + '%';
+          prog.appendChild(fill);
+          card.appendChild(prog);
+        }
 
-    sortLabel: function () {
-      if (this.sort === 'popular') return 'По популярности';
-      if (this.sort === 'rating') return 'По рейтингу';
-      return 'По обновлению';
-    },
-
-    cycle: function (what) {
-      if (what === 'filter') {
-        var i = ['all', 'ongoing', 'finished'].indexOf(this.filter);
-        this.filter = ['all', 'ongoing', 'finished'][(i + 1) % 3];
-        storageSet('sched_filter', this.filter);
-      } else {
-        var j = ['updated', 'popular', 'rating'].indexOf(this.sort);
-        this.sort = ['updated', 'popular', 'rating'][(j + 1) % 3];
-        storageSet('sched_sort', this.sort);
-      }
-      this.render();
-    },
-
-    relative: function (ts) {
-      if (!ts) return 'дата неизвестна';
-      var now = (new Date()).getTime();
-      var day = 24 * 60 * 60 * 1000;
-      var start = new Date();
-      start.setHours(0, 0, 0, 0);
-      var today = start.getTime();
-      if (ts >= today) return 'сегодня';
-      if (ts >= today - day) return 'вчера';
-      var days = Math.floor((today - ts) / day) + 1;
-      if (days < 7) return days + ' дня назад';
-      if (days < 14) return 'неделю назад';
-      if (days < 31) return Math.floor(days / 7) + ' нед. назад';
-      if (days < 365) return Math.floor(days / 30) + ' мес. назад';
-      return Math.floor(days / 365) + ' г. назад';
-    },
-
-    card: function (rel, isFollow) {
-      var self = this;
-      var card = document.createElement('div');
-      card.className = 'history_card focusable';
-      card.setAttribute('data-id', String(rel.id));
-      card.setAttribute('data-title', rel.title_ru || '');
-      if (rel.image) card.style.backgroundImage = 'url("' + rel.image + '")';
-
-      var cover = document.createElement('div');
-      cover.className = 'h_cover';
-      card.appendChild(cover);
-
-      var info = document.createElement('div');
-      info.className = 'h_info';
-      var t = document.createElement('div');
-      t.className = 'h_title';
-      t.textContent = rel.title_ru || 'Без названия';
-      var m = document.createElement('div');
-      m.className = 'h_meta';
-      var parts = [self.relative(self.updatedAt(rel))];
-      var total = Number(rel.episodes_total) || 0;
-      var out = Number(rel.episodes_released) || 0;
-      if (total) parts.push(out + '/' + total);
-      else if (out) parts.push('эп. ' + out);
-      if (rel.grade) parts.push('★ ' + Number(rel.grade).toFixed(2));
-      m.textContent = parts.join(' · ');
-      info.appendChild(t);
-      info.appendChild(m);
-      card.appendChild(info);
-
-      /* полоска «вышло X из Y» */
-      if (total > 0) {
-        var prog = document.createElement('div');
-        prog.className = 'h_prog';
-        var fill = document.createElement('div');
-        fill.className = 'h_prog_fill';
-        fill.style.width = Math.max(4, Math.min(100, Math.round(out / total * 100))) + '%';
-        prog.appendChild(fill);
-        card.appendChild(prog);
-      }
-
-      /* бейдж новых серий */
-      if (isFollow) {
-        var n = TVFollow.badge(rel.id, out);
-        if (n > 0) {
+        if (badge > 0) {
           var b = document.createElement('div');
           b.className = 'h_badge';
-          b.textContent = '+' + n;
+          b.textContent = '+' + badge;
           card.appendChild(b);
         }
+
+        row.appendChild(card);
+        shown++;
       }
-      return card;
+      if (!shown) { sec.style.display = 'none'; return; }
+      sec.style.display = '';
+      TVNavigation.refresh();
     },
 
-    groupOf: function (ts, todayStart) {
-      var day = 24 * 60 * 60 * 1000;
-      if (ts >= todayStart) return 'today';
-      if (ts >= todayStart - 6 * day) return 'week';
-      if (ts >= todayStart - 29 * day) return 'month';
-      return 'earlier';
-    },
-
-    render: function () {
-      var self = this;
-      var box = $('schedule_groups');
-      if (!box) return;
-      if ($('sched_filter_val')) $('sched_filter_val').textContent = this.filterLabel();
-      if ($('sched_sort_val')) $('sched_sort_val').textContent = this.sortLabel();
-      if (!TVCatalog.items.length) {
-        box.innerHTML = '<div class="history_empty">Загрузка каталога...</div>';
-        if ($('sched_counter')) $('sched_counter').textContent = 'Загрузка каталога...';
+    unfollow: function (id) {
+      id = Number(id);
+      if (!id) return;
+      if (TVFollow.has(id)) {
+        TVFollow.toggle(id, 0);
+        toast('Убрано из «Отслеживаемых»', 2000);
       }
-
-      /* страховка: если каталог не ответил за 20 с — показываем ошибку с повтором */
-      var done = false;
-      var guard = setTimeout(function () {
-        if (done) return;
-        done = true;
-        if ($('sched_counter')) $('sched_counter').textContent = 'Каталог не ответил';
-        box.innerHTML = '<div class="history_empty">Каталог не ответил — OK, чтобы повторить</div>';
-        TVError.show('Не удалось загрузить каталог', function () {
-          TVCatalog.loading = null;
-          TVSchedule.render();
-        });
-      }, 20000);
-
-      TVCatalog.ensure().then(function (items) {
-        done = true;
-        clearTimeout(guard);
-        var all = items.slice();
-        if (!all.length) {
-          box.innerHTML = '<div class="history_empty">Каталог пуст — проверьте сеть</div>';
-          if ($('sched_counter')) $('sched_counter').textContent = 'Каталог пуст';
-          TVError.show('Каталог не загрузился', function () {
-            TVCatalog.loading = null;
-            TVSchedule.render();
-          });
-          return;
-        }
-        var ongoing = 0;
-        for (var i = 0; i < all.length; i++) {
-          if (self.isOngoing(all[i])) ongoing++;
-        }
-
-        var list = TVSections.dropWatched(all);
-        var dated = [];
-        for (var j = 0; j < list.length; j++) {
-          if (self.updatedAt(list[j]) > 0) dated.push(list[j]);
-        }
-
-        var filtered = [];
-        for (var k = 0; k < dated.length; k++) {
-          var rel = dated[k];
-          if (self.filter === 'ongoing' && !self.isOngoing(rel)) continue;
-          if (self.filter === 'finished' && self.isOngoing(rel)) continue;
-          filtered.push(rel);
-        }
-
-        filtered.sort(function (a, b) {
-          if (self.sort === 'popular') {
-            return (Number(b.watching_count) || 0) - (Number(a.watching_count) || 0);
-          }
-          if (self.sort === 'rating') {
-            return (Number(b.grade) || 0) - (Number(a.grade) || 0);
-          }
-          return self.updatedAt(b) - self.updatedAt(a);
-        });
-
-        var start = new Date();
-        start.setHours(0, 0, 0, 0);
-        var todayStart = start.getTime();
-        var todayCount = 0;
-        for (var q = 0; q < filtered.length; q++) {
-          if (self.updatedAt(filtered[q]) >= todayStart) todayCount++;
-        }
-        if ($('sched_counter')) {
-          $('sched_counter').textContent = 'Онгоингов: ' + ongoing + ' · обновлено сегодня: ' + todayCount;
-        }
-
-        var followed = [];
-        var rest = [];
-        for (var r = 0; r < filtered.length; r++) {
-          if (TVFollow.has(filtered[r].id)) followed.push(filtered[r]);
-          else rest.push(filtered[r]);
-        }
-
-        box.innerHTML = '';
-        if (followed.length) self.addGroup(box, 'Следить', followed, true);
-
-        var titles = { today: 'Сегодня', week: 'На этой неделе', month: 'В этом месяце', earlier: 'Ранее' };
-        var order = ['today', 'week', 'month', 'earlier'];
-        for (var g = 0; g < order.length; g++) {
-          var key = order[g];
-          var part = [];
-          for (var s = 0; s < rest.length; s++) {
-            if (self.groupOf(self.updatedAt(rest[s]), todayStart) === key) part.push(rest[s]);
-          }
-          if (part.length) self.addGroup(box, titles[key], part, false);
-        }
-
-        if (!followed.length && !rest.length) {
-          box.innerHTML = '<div class="history_empty">Обновлений нет — измените фильтр</div>';
-        }
-
-        TVNavigation.refresh();
-        if (TVList.current === 'schedule') {
-          var first = box.querySelector('.focusable');
-          if (first) TVNavigation.focus(first, true);
-        }
-      }).catch(function (e) {
-        done = true;
-        clearTimeout(guard);
-        box.innerHTML = '<div class="history_empty">Ошибка загрузки каталога</div>';
-        if ($('sched_counter')) $('sched_counter').textContent = 'Ошибка загрузки';
-        TVError.show('Не удалось загрузить каталог', function () {
-          TVCatalog.loading = null;
-          TVSchedule.render();
-        });
-      });
-    },
-
-    addGroup: function (box, title, items, isFollow) {
-      var h = document.createElement('h3');
-      h.className = 'sched_group_title' + (isFollow ? ' sched_follow_title' : '');
-      h.textContent = title + (isFollow ? ' (' + items.length + ')' : '');
-      box.appendChild(h);
-
-      var grid = document.createElement('div');
-      grid.className = 'cards_grid';
-      for (var i = 0; i < items.length; i++) {
-        grid.appendChild(this.card(items[i], isFollow));
-      }
-      box.appendChild(grid);
-    },
-
-    /* Открыть последнюю вышедшую серию релиза, не заходя в карточку */
-    playLatest: function (id) {
-      var rel = null;
-      for (var i = 0; i < TVCatalog.items.length; i++) {
-        if (String(TVCatalog.items[i].id) === String(id)) { rel = TVCatalog.items[i]; break; }
-      }
-      var title = rel ? (rel.title_ru || '') : '';
-      var poster = rel ? (rel.image || '') : '';
-      var total = rel ? (Number(rel.episodes_total) || 0) : 0;
-      var out = rel ? (Number(rel.episodes_released) || 0) : 0;
-
-      function pickType(types) {
-        var idx = 0;
-        var saved = Number(storageGet('last_type_id', '0'));
-        for (var j = 0; j < types.length; j++) {
-          if (Number(types[j].id) === saved) { idx = j; break; }
-        }
-        return types[idx];
-      }
-
-      function pickSource(srcs) {
-        var clean = [];
-        for (var j = 0; j < srcs.length; j++) {
-          if (!/libria/i.test(String(srcs[j] && srcs[j].name || ''))) clean.push(srcs[j]);
-        }
-        if (!clean.length) return null;
-        var saved = Number(storageGet('last_source_id', '0'));
-        for (var k = 0; k < clean.length; k++) {
-          if (Number(clean[k].id) === saved) return clean[k];
-        }
-        return clean[0];
-      }
-
-      function fromCache() {
-        var c = cacheGet('cache_release_' + id);
-        if (c && c.types && c.types.length) return Promise.resolve({ rel: c.rel, types: c.types });
-        return AnixApi.release(id).then(function (r) {
-          return AnixApi.types(id).then(function (types) {
-            cacheSet('cache_release_' + id, { rel: r, types: types }, 15 * 60 * 1000);
-            return { rel: r, types: types || [] };
-          });
-        });
-      }
-
-      toast('Открываю последнюю серию...', 2000);
-      Loader.show('Загрузка серии...');
-      fromCache().then(function (data) {
-        var t = pickType(data.types || []);
-        if (!t) throw new Error('нет озвучек');
-        var srcKey = 'cache_sources_' + id + '_' + t.id;
-        var cachedSrc = cacheGet(srcKey);
-        return (cachedSrc ? Promise.resolve(cachedSrc) : AnixApi.sources(id, t.id).then(function (srcs) {
-          var clean = [];
-          for (var i2 = 0; i2 < (srcs || []).length; i2++) {
-            if (!/libria/i.test(String(srcs[i2] && srcs[i2].name || ''))) clean.push(srcs[i2]);
-          }
-          cacheSet(srcKey, clean, 10 * 60 * 1000);
-          return clean;
-        })).then(function (srcs) {
-          var s = pickSource(srcs || []);
-          if (!s) throw new Error('нет источников');
-          var epKey = 'cache_eps_' + id + '_' + t.id + '_' + s.id;
-          var cachedEps = cacheGet(epKey);
-          return (cachedEps && cachedEps.length ? Promise.resolve(cachedEps) : AnixApi.episodes(id, t.id, s.id).then(function (eps) {
-            var arr = eps || [];
-            if (arr.length) cacheSet(epKey, arr, 10 * 60 * 1000);
-            return arr;
-          }));
-        });
-      }).then(function (eps) {
-        Loader.hide();
-        if (!eps || !eps.length) throw new Error('нет серий');
-        var last = eps[eps.length - 1];
-        var item = {
-          id: 'anix:' + id,
-          title: title,
-          poster: poster,
-          episode: Number(last.position) || eps.length,
-          src: last.url
-        };
-        TVFollow.snapshot(id, out || total);
-        TVPlayer.playKodik(last.url, item);
-      }).catch(function (e) {
-        Loader.hide();
-        toast('Не удалось открыть серию: ' + ((e && e.message) || 'ошибка'));
-      });
+      this.render();
     }
   };
 
@@ -4547,7 +4324,6 @@
 
     render: function (kind) {
       if (kind === 'popular') this.renderPopular();
-      else if (kind === 'schedule') TVSchedule.render();
       else if (kind === 'collections') this.renderCollections();
       else if (kind === 'collection') this.renderCollection();
       else if (kind === 'filters') this.renderFilters();
@@ -5137,7 +4913,7 @@
 
     if (el.classList.contains('nav_item')) {
       var nav = el.getAttribute('data-nav');
-      if (nav === 'popular' || nav === 'schedule' || nav === 'collections' ||
+      if (nav === 'popular' || nav === 'collections' ||
           nav === 'filters' || nav === 'bookmarks' || nav === 'history') {
         if (TVRelease.isOpen() || TVRelease.isRelatedOpen()) {
           TVRelease.returnKind = null;
@@ -5181,7 +4957,6 @@
     if (el.id === 'rel_bookmark') { toggleBookmark(); return; }
     if (el.id === 'rel_follow') { TVRelease.toggleFollow(); return; }
     if (el.id === 'rel_reset_watched') { TVRelease.resetWatched(); return; }
-    if (el.hasAttribute('data-sched-toggle')) { TVSchedule.cycle(el.getAttribute('data-sched-toggle')); return; }
     if (el.id === 'rel_related_btn') { TVRelease.openRelated(); return; }
     if (el.id === 'rel_back') { TVRelease.hide(); return; }
     if (el.id === 'settings_back') { TVSettings.hide(); return; }
@@ -5246,39 +5021,24 @@
 
     /* Цветные кнопки: зелёная — статистика в плеере / «последняя серия» в обновлениях /
        закладка в остальных местах; красная — убрать из «Следить» или удалить запись. */
+    /* Цветные кнопки: зелёная — статистика в плеере, иначе закладка;
+       красная — снять «Отслеживать» с карточки на главной или удалить запись. */
     if (code === KEY.GREEN) {
       e.preventDefault();
       if (isPlayerOpen()) {
         toggleInfoOnce();
         return;
       }
-      if (TVList.current === 'schedule') {
-        var schedCard = TVNavigation.current && TVNavigation.current.closest ?
-          TVNavigation.current.closest('[data-id]') : null;
-        if (schedCard && schedCard.getAttribute('data-id')) {
-          TVSchedule.playLatest(schedCard.getAttribute('data-id'));
-          return;
-        }
-      }
       toggleBookmark();
       return;
     }
     if (code === KEY.RED) {
       e.preventDefault();
-      if (TVList.current === 'schedule') {
-        var unfollowCard = TVNavigation.current && TVNavigation.current.closest ?
-          TVNavigation.current.closest('[data-id]') : null;
-        var uid = unfollowCard ? unfollowCard.getAttribute('data-id') : '';
-        if (uid) {
-          if (TVFollow.has(uid)) {
-            TVFollow.toggle(uid, 0);
-            toast('Убрано из «Следить»', 2000);
-            TVSchedule.render();
-          } else {
-            toast('Этого релиза нет в «Следить»', 2000);
-          }
-          return;
-        }
+      var followCard = TVNavigation.current && TVNavigation.current.closest ?
+        TVNavigation.current.closest('[data-follow]') : null;
+      if (followCard) {
+        TVFollowMain.unfollow(followCard.getAttribute('data-follow'));
+        return;
       }
       removeCurrentEntry();
       return;
@@ -5481,6 +5241,7 @@
       TVHistory.render();
       TVBookmarks.render();
       TVContinue.render();
+      TVFollowMain.render();
       cachePurge();
     } catch (eCore) { /* noop */ }
 
@@ -5542,8 +5303,8 @@
   window.TVContinue = TVContinue;
   window.TVError = TVError;
   window.TVNetDiag = TVNetDiag;
-  window.TVSchedule = TVSchedule;
   window.TVFollow = TVFollow;
+  window.TVFollowMain = TVFollowMain;
   /* для проверок: разбор и раскодирование ссылок Kodik */
   window.kodikParse = kodikParse;
   window.kodikDecodeLink = kodikDecodeLink;
