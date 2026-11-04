@@ -790,6 +790,16 @@
 
     clear: function () {
       try { storageSet(this.KEY, '{}'); } catch (e) { /* noop */ }
+    },
+
+    /* Сбросить отметки одного релиза */
+    removeRelease: function (relId) {
+      if (!relId) return;
+      var map = this.get();
+      var key = String(relId);
+      if (map[key] === undefined) return;
+      delete map[key];
+      try { storageSet(this.KEY, JSON.stringify(map)); } catch (e) { /* noop */ }
     }
   };
 
@@ -3460,6 +3470,27 @@
       });
     },
 
+    /* Сброс отметок просмотренных серий у текущего релиза (два нажатия OK) */
+    resetWatched: function () {
+      var self = this;
+      if (!self.rel) return;
+      if (!self.resetPending) {
+        self.resetPending = true;
+        if (self.resetTimer) clearTimeout(self.resetTimer);
+        self.resetTimer = setTimeout(function () {
+          self.resetPending = false;
+          self.resetTimer = null;
+        }, 4000);
+        toast('Нажмите OK ещё раз, чтобы сбросить отметки', 3500);
+        return;
+      }
+      self.resetPending = false;
+      if (self.resetTimer) { clearTimeout(self.resetTimer); self.resetTimer = null; }
+      TVWatched.removeRelease(self.rel.id);
+      self.renderEpisodes();
+      toast('Отметки просмотренных серий сброшены', 2500);
+    },
+
     cycleType: function () {
       if (!this.types.length) return;
       this.typeIndex = (this.typeIndex + 1) % this.types.length;
@@ -4660,6 +4691,7 @@
     if (el.id === 'rel_voice') { TVRelease.chooseType(); return; }
     if (el.id === 'rel_source') { TVRelease.chooseSource(); return; }
     if (el.id === 'rel_bookmark') { toggleBookmark(); return; }
+    if (el.id === 'rel_reset_watched') { TVRelease.resetWatched(); return; }
     if (el.id === 'rel_related_btn') { TVRelease.openRelated(); return; }
     if (el.id === 'rel_back') { TVRelease.hide(); return; }
     if (el.id === 'settings_back') { TVSettings.hide(); return; }
