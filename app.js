@@ -6,7 +6,7 @@
   'use strict';
 
   /* Версия встроенной копии; publish.ps1 подставляет актуальную */
-  var APP_VERSION = '1.0';
+  var APP_VERSION = '1.3.6';
 
   var KEY = {
     LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40,
