@@ -1725,7 +1725,7 @@
     hintText: function () {
       return 'RETURN — выход &nbsp;|&nbsp; OK — пауза &nbsp;|&nbsp; ← → — ' + this.seekStep() +
         ' с &nbsp;|&nbsp; 1–9 — % &nbsp;|&nbsp; ▲▼ — скрыть &nbsp;|&nbsp; CH± — серии &nbsp;|&nbsp; ' +
-        'ЖЁЛТАЯ — качество &nbsp;|&nbsp; СИНЯЯ — шаг &nbsp;|&nbsp; INFO — статистика';
+        'ЖЁЛТАЯ — качество &nbsp;|&nbsp; СИНЯЯ — шаг &nbsp;|&nbsp; ЗЕЛЁНАЯ — статистика';
     },
 
     updateHint: function () {
@@ -4751,11 +4751,12 @@
       return;
     }
 
-    /* Цветные кнопки пульта: зелёная — закладка, красная — удалить запись.
-       Работают и в плеере (закладка на текущий релиз), и на любом экране. */
+    /* Цветные кнопки: зелёная — закладка (вне плеера) и статистика (в плеере),
+       красная — удалить запись. */
     if (code === KEY.GREEN) {
       e.preventDefault();
-      toggleBookmark();
+      if (isPlayerOpen()) toggleInfoOnce();
+      else toggleBookmark();
       return;
     }
     if (code === KEY.RED) {
