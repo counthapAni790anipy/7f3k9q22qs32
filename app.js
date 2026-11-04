@@ -4501,6 +4501,27 @@
     if (!exitApp()) toast('Приложение работает без tizen: выход доступен только на ТВ');
   }
 
+  /* Цифра из события: e.key ('1'..'9'), обычный код 48–57 или numpad 96–105 */
+  function digitOf(e, code) {
+    var k = e && e.key;
+    if (k && k.length === 1 && k >= '0' && k <= '9') return Number(k);
+    if (code >= 48 && code <= 57) return code - 48;
+    if (code >= 96 && code <= 105) return code - 96;
+    return -1;
+  }
+
+  /* Перемотка цифрой: работает и в keydown, и в keyup, без двойного прыжка */
+  var lastDigitAt = 0;
+  function seekByDigitOnce(e, code) {
+    var d = digitOf(e, code);
+    if (d < 1 || d > 9) return false;
+    var now = (new Date()).getTime();
+    if (now - lastDigitAt < 250) return true;
+    lastDigitAt = now;
+    if (isPlayerOpen() && !TVPlayer.webMode) TVPlayer.seekPercent(d * 10);
+    return true;
+  }
+
   /* Нормальные имена клавиш (Tizen 2.4+: tizen.tvinputdevice.getKeyName) */
   function keyNameOf(code) {
     try {
@@ -4821,9 +4842,8 @@
         return;
       }
       /* цифры 1–9 — переход к 10–90 % длительности */
-      if (code >= 49 && code <= 57 && !TVPlayer.webMode) {
+      if (seekByDigitOnce(e, code)) {
         e.preventDefault();
-        TVPlayer.seekPercent((code - 48) * 10);
         return;
       }
       /* ▲ ▼ — скрыть/показать интерфейс (вместо перемотки) */
@@ -4899,6 +4919,8 @@
     } else if (code === KEY.INFO) {
       e.preventDefault();
       toggleInfoOnce();
+    } else if (seekByDigitOnce(e, code)) {
+      e.preventDefault();
     }
   }
 
@@ -4924,6 +4946,8 @@
       'MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaFastForward', 'MediaRewind', 'MediaStop',
       /* INFO — статистика плеера (на части пультов приходит только после регистрации) */
       'Info', 'Tools', 'Guide',
+      /* цифры (на части пультов доставляются только после регистрации) */
+      '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
       /* каналы в плеере листают серии */
       'ChannelUp', 'ChannelDown',
       /* цветные кнопки: GREEN — закладка, RED — удалить запись, YELLOW — качество, BLUE — шаг перемотки */
